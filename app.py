@@ -832,6 +832,61 @@ def new_case():
                   " ".join(f"{field}: {', '.join(errors)}" for field, errors in form.errors.items()), "danger")
     return render_template("case_form.html", form=form, attachment_categories=ATTACHMENT_CATEGORIES)
 
+@app.route("/cases/<int:case_id>/edit", methods=["GET", "POST"])
+def edit_case(case_id):
+    if session.get("role") not in ("tax", "initiator"):
+        return redirect(url_for("home"))
+    case = Case.query.get_or_404(case_id)
+    _initiator_case_access(case)
+    role = session.get("role")
+    if role == "initiator" and case.workflow_status != "Returned for Clarification":
+        flash("You can edit and resubmit a request only after Tax Compliance returns it for clarification.", "warning")
+        return redirect(url_for("case_detail", case_id=case.id))
+    form = CaseForm(obj=case)
+    if role == "initiator":
+        form.initiator_name.validators = [Optional(), Length(max=120)]
+    if form.validate_on_submit():
+        old_values = {name: getattr(case, name) for name in (
+            "case_type", "policy_number", "customer_name", "customer_tin", "product", "branch", "underwriter",
+            "reason", "effective_date", "original_invoice_no", "original_invoice_amount", "adjustment_amount", "vat_amount")}
+        try:
+            for name in old_values:
+                value = getattr(form, name).data
+                if isinstance(value, str):
+                    value = value.strip() or None
+                setattr(case, name, value)
+            if role == "tax":
+                case.initiator_name = (form.initiator_name.data or case.initiator_name).strip()
+            else:
+                case.initiator_name = _initiator_email()
+                # A successful initiator resubmission returns the case to the Tax Compliance queue.
+                case.workflow_status = "Under Tax Review"
+            for category, _label in ATTACHMENT_CATEGORIES:
+                for uploaded_file in request.files.getlist(f"files_{category}"):
+                    if uploaded_file and uploaded_file.filename:
+                        _save_case_attachment(case, uploaded_file, category)
+            changed = [name for name, old in old_values.items() if old != getattr(case, name)]
+            actor = _initiator_email() if role == "initiator" else (session.get("actor_name") or "Tax Compliance")
+            role_label = "Initiator" if role == "initiator" else "Tax Compliance"
+            log_action(case, f"{role_label} amended case", "Changed fields: " + (", ".join(changed) if changed else "No core fields changed; documents may have been added"))
+            if role == "initiator":
+                db.session.add(InAppNotification(case_id=case.id, case_reference=case.reference,
+                    title="Resubmitted request", message=f"{case.reference} was amended and resubmitted by {case.initiator_name} for Tax Compliance review."))
+            else:
+                _notify_initiator(case, f"tax-amendment:{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}",
+                    "Tax Compliance amended your request", f"Tax Compliance updated details on case {case.reference}. Open the case to review the changes.")
+            db.session.commit()
+            flash("Case details updated successfully." if role == "tax" else "Your changes have been saved and the request resubmitted to Tax Compliance.", "success")
+            return redirect(url_for("case_detail", case_id=case.id))
+        except Exception:
+            db.session.rollback()
+            logger.exception("Case edit failed for case %s", case.reference)
+            flash("The changes could not be saved. Please check the server logs and try again.", "danger")
+    elif request.method == "POST" and form.errors:
+        flash("Please correct the highlighted fields: " + " ".join(f"{k}: {', '.join(v)}" for k, v in form.errors.items()), "danger")
+    return render_template("case_form.html", form=form, attachment_categories=ATTACHMENT_CATEGORIES,
+                           is_edit=True, case=case)
+
 @app.route("/cases/<int:case_id>")
 def case_detail(case_id):
     if session.get("role") not in ("tax", "initiator"):
