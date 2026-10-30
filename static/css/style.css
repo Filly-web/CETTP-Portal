@@ -4,3 +4,20 @@
 /* Premium Register cancellation tracker additions */
 .table td { vertical-align: middle; }
 .badge.text-bg-warning { color: #4d3700 !important; }
+
+
+/* Compact, professional controls and reconciliation summary cards */
+body{font-size:.92rem;line-height:1.48}
+.main-content{font-size:.91rem}
+.page-title{font-size:clamp(1.45rem,2.4vw,1.9rem);letter-spacing:-.65px}
+h1,h2,h3,h4,h5{letter-spacing:-.25px}
+.btn{font-size:.82rem;padding:.48rem .78rem;border-radius:7px;font-weight:650;line-height:1.25}
+.btn-sm{font-size:.72rem;padding:.31rem .52rem;border-radius:6px}
+.form-control,.form-select{font-size:.84rem;padding:.52rem .68rem}
+.form-label{font-size:.78rem}
+.table{font-size:.79rem}
+.table thead th{font-size:.66rem}
+.tracker-kpi{height:100%;background:var(--white);border:1px solid var(--line);border-radius:11px;padding:13px 15px;box-shadow:0 4px 15px #18365b06}
+.tracker-kpi span,.tracker-kpi small{display:block;color:var(--muted);font-size:.72rem}
+.tracker-kpi strong{display:block;font:800 1.45rem Manrope,sans-serif;color:var(--ink);margin:5px 0 2px}
+.tracker-kpi small{font-size:.67rem}

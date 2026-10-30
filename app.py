@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, send_file, abort
 from flask_sqlalchemy import SQLAlchemy
 from flask_wtf import FlaskForm
@@ -122,6 +122,20 @@ class InAppNotificationRead(db.Model):
     read_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     notification = db.relationship("InAppNotification", backref=db.backref("read_receipts", lazy=True, cascade="all, delete-orphan"))
     __table_args__ = (UniqueConstraint("notification_id", "actor_name", name="uq_inapp_notification_actor_read"),)
+
+
+class InitiatorNotification(db.Model):
+    """Private in-app update for the Initiator who owns a case."""
+    id = db.Column(db.Integer, primary_key=True)
+    case_id = db.Column(db.Integer, db.ForeignKey("case.id", ondelete="CASCADE"), nullable=False, index=True)
+    recipient_email = db.Column(db.String(254), nullable=False, index=True)
+    title = db.Column(db.String(180), nullable=False)
+    message = db.Column(db.Text, nullable=False)
+    event_key = db.Column(db.String(80), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    read_at = db.Column(db.DateTime)
+    case = db.relationship("Case", backref=db.backref("initiator_notifications", lazy=True, cascade="all, delete-orphan"))
+    __table_args__ = (UniqueConstraint("case_id", "recipient_email", "event_key", name="uq_initiator_notification_event"),)
 
 
 class ReconciliationItem(db.Model):
@@ -438,26 +452,71 @@ def mark_all_notifications_read():
     return redirect(url_for("notifications"))
 
 
+def _initiator_email():
+    return (session.get("initiator_email") or session.get("actor_name") or "").strip().lower()
+
+
+def _initiator_case_query():
+    email = _initiator_email()
+    if not email:
+        return Case.query.filter(Case.id == -1)
+    return Case.query.filter(func.lower(Case.initiator_name) == email)
+
+
+def _initiator_case_access(case):
+    if session.get("role") == "tax":
+        return True
+    if session.get("role") == "initiator" and (case.initiator_name or "").strip().lower() == _initiator_email():
+        return True
+    abort(403)
+
+
+def _notify_initiator(case, event_key, title, message):
+    recipient = (case.initiator_name or "").strip().lower()
+    if not recipient or "@" not in recipient:
+        return
+    try:
+        existing = InitiatorNotification.query.filter_by(case_id=case.id, recipient_email=recipient, event_key=event_key).first()
+        if not existing:
+            db.session.add(InitiatorNotification(case_id=case.id, recipient_email=recipient,
+                title=title[:180], message=message, event_key=event_key[:80]))
+    except Exception:
+        logger.exception("Could not create initiator notification for %s", case.reference)
+
+
 @app.route("/")
 def home():
     return render_template("home.html")
 
-@app.route("/enter/<role>", methods=["GET", "POST"])
-def enter_role(role):
-    if role not in ("initiator", "tax"):
-        return redirect(url_for("home"))
-    if role == "tax":
-        if request.method == "POST":
-            code = request.form.get("security_code", "")
-            if code == os.environ.get("TAX_ACCESS_CODE", "4823"):
-                session["role"] = "tax"
-                session["actor_name"] = request.form.get("actor_name", "").strip() or "Tax Compliance"
-                return redirect(url_for("dashboard"))
-            flash("Access Denied", "danger")
-        return render_template("tax_access.html")
-    session["role"] = "initiator"
-    session["actor_name"] = ""
-    return redirect(url_for("new_case"))
+@app.route("/enter/tax", methods=["GET", "POST"])
+def enter_tax_role():
+    if request.method == "POST":
+        code = request.form.get("security_code", "")
+        if code == os.environ.get("TAX_ACCESS_CODE", "4823"):
+            session["role"] = "tax"
+            session["actor_name"] = request.form.get("actor_name", "").strip() or "Tax Compliance"
+            return redirect(url_for("dashboard"))
+        flash("Access Denied", "danger")
+    return render_template("tax_access.html")
+
+
+@app.route("/enter/initiator", methods=["GET", "POST"])
+@csrf.exempt
+def enter_initiator_role():
+    # Pilot mode: email is the username only; no OTP, password or verification code.
+    # CSRF is exempted only for this email-only entry endpoint.
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        import re
+        if not email or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+            flash("Enter a valid email address to continue.", "danger")
+            return render_template("initiator_access.html")
+        session.clear()
+        session["role"] = "initiator"
+        session["actor_name"] = email
+        session["initiator_email"] = email
+        return redirect(url_for("initiator_dashboard"))
+    return render_template("initiator_access.html")
 
 @app.route("/logout")
 def logout():
@@ -473,10 +532,59 @@ def dashboard():
     awaiting_tra = Case.query.filter(Case.tra_status.in_(["Not Submitted", "Pending"])).count()
     closed = Case.query.filter_by(workflow_status="Closed").count()
     recent = Case.query.order_by(Case.created_at.desc()).limit(8).all()
+    # Default overdue threshold is configurable in Render using CETTP_OVERDUE_DAYS.
+    try:
+        overdue_days = max(1, int(os.environ.get("CETTP_OVERDUE_DAYS", "5")))
+    except (TypeError, ValueError):
+        overdue_days = 5
+    overdue_cutoff = datetime.utcnow() - timedelta(days=overdue_days)
+    overdue_query = Case.query.filter(Case.workflow_status != "Closed", Case.created_at <= overdue_cutoff)
+    overdue_count = overdue_query.count()
+    overdue_cases = overdue_query.order_by(Case.created_at.asc()).limit(10).all()
     by_status = db.session.query(Case.workflow_status, func.count(Case.id)).group_by(Case.workflow_status).all()
     by_type = db.session.query(Case.case_type, func.count(Case.id)).group_by(Case.case_type).all()
     return render_template("dashboard.html", total=total, open_cases=open_cases, awaiting_tra=awaiting_tra,
-                           closed=closed, recent=recent, by_status=by_status, by_type=by_type)
+                           closed=closed, recent=recent, by_status=by_status, by_type=by_type,
+                           overdue_days=overdue_days, overdue_count=overdue_count, overdue_cases=overdue_cases, now_utc=datetime.utcnow())
+
+@app.route("/initiator")
+def initiator_dashboard():
+    if session.get("role") != "initiator":
+        return redirect(url_for("home"))
+    base = _initiator_case_query()
+    all_cases = base.order_by(Case.created_at.desc()).all()
+    overdue_days = max(1, int(os.environ.get("CETTP_OVERDUE_DAYS", "5")))
+    cutoff = datetime.utcnow() - timedelta(days=overdue_days)
+    counts = {
+        "all": len(all_cases),
+        "drafts": sum(1 for c in all_cases if c.workflow_status == "Draft"),
+        "awaiting": sum(1 for c in all_cases if c.workflow_status in ("Initiated", "Under Tax Review", "Approved for TRA Processing", "Submitted to TRA")),
+        "returned": sum(1 for c in all_cases if c.workflow_status == "Returned for Clarification"),
+        "completed": sum(1 for c in all_cases if c.workflow_status in ("Closed", "TRA Approved")),
+        "overdue": sum(1 for c in all_cases if c.workflow_status not in ("Closed", "TRA Approved", "TRA Rejected", "Draft") and c.created_at <= cutoff),
+    }
+    unread = InitiatorNotification.query.filter_by(recipient_email=_initiator_email(), read_at=None).count()
+    recent = all_cases[:8]
+    return render_template("initiator_dashboard.html", counts=counts, recent=recent, overdue_days=overdue_days, unread=unread)
+
+
+@app.route("/initiator/notifications")
+def initiator_notifications():
+    if session.get("role") != "initiator":
+        return redirect(url_for("home"))
+    rows = InitiatorNotification.query.filter_by(recipient_email=_initiator_email()).order_by(InitiatorNotification.created_at.desc()).limit(200).all()
+    return render_template("initiator_notifications.html", notifications=rows)
+
+
+@app.route("/initiator/notifications/<int:notification_id>/read", methods=["POST"])
+def initiator_notification_read(notification_id):
+    if session.get("role") != "initiator":
+        return redirect(url_for("home"))
+    item = InitiatorNotification.query.filter_by(id=notification_id, recipient_email=_initiator_email()).first_or_404()
+    item.read_at = datetime.utcnow()
+    db.session.commit()
+    return redirect(url_for("case_detail", case_id=item.case_id))
+
 
 @app.route("/cases")
 def cases():
@@ -485,7 +593,10 @@ def cases():
     q = request.args.get("q", "").strip()
     status = request.args.get("status", "")
     case_type = request.args.get("type", "")
-    query = Case.query
+    submitted_from = request.args.get("from", "").strip()
+    submitted_to = request.args.get("to", "").strip()
+    overdue_only = request.args.get("overdue", "") == "1"
+    query = _initiator_case_query() if session.get("role") == "initiator" else Case.query
     if q:
         query = query.filter(or_(Case.reference.ilike(f"%{q}%"), Case.policy_number.ilike(f"%{q}%"),
                                  Case.customer_name.ilike(f"%{q}%"), Case.tra_reference.ilike(f"%{q}%")))
@@ -493,8 +604,18 @@ def cases():
         query = query.filter_by(workflow_status=status)
     if case_type:
         query = query.filter_by(case_type=case_type)
+    if submitted_from:
+        try: query = query.filter(Case.created_at >= datetime.strptime(submitted_from, "%Y-%m-%d"))
+        except ValueError: flash("Invalid start date filter.", "warning")
+    if submitted_to:
+        try: query = query.filter(Case.created_at < datetime.strptime(submitted_to, "%Y-%m-%d") + timedelta(days=1))
+        except ValueError: flash("Invalid end date filter.", "warning")
+    if overdue_only:
+        try: overdue_days = max(1, int(os.environ.get("CETTP_OVERDUE_DAYS", "5")))
+        except (TypeError, ValueError): overdue_days = 5
+        query = query.filter(Case.workflow_status.notin_(["Closed", "TRA Approved", "TRA Rejected", "Draft"]), Case.created_at <= datetime.utcnow() - timedelta(days=overdue_days))
     records = query.order_by(Case.created_at.desc()).all()
-    return render_template("cases.html", records=records, statuses=STATUSES, q=q, status=status, case_type=case_type)
+    return render_template("cases.html", records=records, statuses=STATUSES, q=q, status=status, case_type=case_type, submitted_from=submitted_from, submitted_to=submitted_to, overdue_only=overdue_only)
 
 @app.route("/cases/<int:case_id>/delete", methods=["POST"])
 def delete_case(case_id):
@@ -518,7 +639,7 @@ def cases_export():
     from openpyxl.styles import Font, PatternFill, Alignment
     from openpyxl.utils import get_column_letter
     q = request.args.get("q", "").strip(); status = request.args.get("status", ""); case_type = request.args.get("type", "")
-    query = Case.query
+    query = _initiator_case_query() if session.get("role") == "initiator" else Case.query
     if q:
         query = query.filter(or_(Case.reference.ilike(f"%{q}%"), Case.policy_number.ilike(f"%{q}%"), Case.customer_name.ilike(f"%{q}%"), Case.tra_reference.ilike(f"%{q}%")))
     if status: query = query.filter_by(workflow_status=status)
@@ -581,6 +702,7 @@ def upload_case_attachments(case_id):
     if session.get("role") not in ("initiator", "tax"):
         return redirect(url_for("home"))
     case = Case.query.get_or_404(case_id)
+    _initiator_case_access(case)
     category = request.form.get("category", "")
     files = request.files.getlist("attachments")
     files = [f for f in files if f and f.filename]
@@ -607,6 +729,7 @@ def download_case_attachment(case_id, attachment_id):
     if session.get("role") not in ("initiator", "tax"):
         return redirect(url_for("home"))
     case = Case.query.get_or_404(case_id)
+    _initiator_case_access(case)
     attachment = CaseAttachment.query.filter_by(id=attachment_id, case_id=case.id, active=True).first_or_404()
     return send_file(BytesIO(attachment.file_data), mimetype=attachment.content_type,
         as_attachment=True, download_name=attachment.stored_filename, max_age=0)
@@ -631,6 +754,15 @@ def new_case():
     if session.get("role") not in ("initiator", "tax"):
         return redirect(url_for("home"))
     form = CaseForm()
+    # Initiators do not submit the Initiator name field. Remove only the
+    # DataRequired validator for this role; Tax Compliance must still provide it.
+    # WTForms re-processes submitted fields during validate_on_submit(), so merely
+    # assigning .data before validation is not sufficient for a missing field.
+    if session.get("role") == "initiator":
+        # Email-only Initiator sessions supply the name server-side. Keep the
+        # field optional during WTForms validation because the UI intentionally
+        # does not submit an editable initiator_name control.
+        form.initiator_name.validators = [Optional(), Length(max=120)]
     if form.validate_on_submit():
         # The Initiator must attach the cancelled invoice/EFD before a request can be submitted.
         cancelled_invoice_files = [f for f in request.files.getlist("files_cancelled_invoice_efd") if f and f.filename]
@@ -657,15 +789,24 @@ def new_case():
                     original_invoice_no=form.original_invoice_no.data.strip() or None,
                     original_invoice_amount=form.original_invoice_amount.data or 0,
                     adjustment_amount=form.adjustment_amount.data or 0, vat_amount=form.vat_amount.data or 0,
-                    initiator_name=form.initiator_name.data.strip())
-        db.session.add(case)
-        db.session.flush()
-        log_action(case, "Case initiated", f"{case.case_type} submitted for policy {case.policy_number}")
+                    initiator_name=((session.get("initiator_email") or session.get("actor_name") or "").strip().lower()
+                                    if session.get("role") == "initiator" else (form.initiator_name.data or "").strip()))
         try:
+            db.session.add(case)
+            db.session.flush()
+            log_action(case, "Case initiated", f"{case.case_type} submitted for policy {case.policy_number}")
             for category, _label in ATTACHMENT_CATEGORIES:
                 for uploaded_file in request.files.getlist(f"files_{category}"):
                     if uploaded_file and uploaded_file.filename:
                         _save_case_attachment(case, uploaded_file, category)
+            # Save the case, attachments, audit log and Tax Compliance alert in
+            # one transaction so a successful case cannot be left without its alert.
+            db.session.add(InAppNotification(
+                case_id=case.id,
+                case_reference=case.reference,
+                title=f"New {case.case_type} request",
+                message=f"{case.initiator_name} submitted a {case.case_type.lower()} for policy {case.policy_number} ({case.customer_name})."
+            ))
             db.session.commit()
         except ValueError as exc:
             db.session.rollback()
@@ -673,23 +814,22 @@ def new_case():
             return render_template("case_form.html", form=form, attachment_categories=ATTACHMENT_CATEGORIES)
         except Exception:
             db.session.rollback()
-            logger.exception("Initial attachment save failed")
-            flash("The request could not be saved with its attachments. Please retry without files or contact the administrator.", "danger")
+            logger.exception("Initiator case submission failed; transaction rolled back")
+            flash("Submission failed and nothing was saved. Please contact the administrator with the time of submission so the server error can be checked.", "danger")
             return render_template("case_form.html", form=form, attachment_categories=ATTACHMENT_CATEGORIES)
-        # In-app Tax Compliance alert works independently of email configuration.
-        db.session.add(InAppNotification(
-            case_id=case.id,
-            case_reference=case.reference,
-            title=f"New {case.case_type} request",
-            message=f"{case.initiator_name} submitted a {case.case_type.lower()} for policy {case.policy_number} ({case.customer_name})."
-        ))
-        db.session.commit()
         email_sent = send_new_request_notification(case)
         if email_sent:
             flash(f"Request submitted successfully. Reference: {case.reference}. Tax Compliance email notification sent.", "success")
         else:
             flash(f"Request submitted successfully. Reference: {case.reference}. An in-app notification is available to Tax Compliance. Email delivery is not configured and has been logged.", "success")
         return redirect(url_for("case_detail", case_id=case.id))
+    if request.method == "POST":
+        # Make validation failures visible instead of silently redisplaying the form.
+        for field_name, errors in form.errors.items():
+            logger.warning("Case submission validation failed for %s: %s", field_name, "; ".join(errors))
+        if form.errors:
+            flash("The request was not submitted. Please review the highlighted fields and try again. " +
+                  " ".join(f"{field}: {', '.join(errors)}" for field, errors in form.errors.items()), "danger")
     return render_template("case_form.html", form=form, attachment_categories=ATTACHMENT_CATEGORIES)
 
 @app.route("/cases/<int:case_id>")
@@ -697,6 +837,7 @@ def case_detail(case_id):
     if session.get("role") not in ("tax", "initiator"):
         return redirect(url_for("home"))
     case = Case.query.get_or_404(case_id)
+    _initiator_case_access(case)
     return render_template("case_detail.html", case=case, attachment_categories=ATTACHMENT_CATEGORIES, attachment_category_labels=dict(ATTACHMENT_CATEGORIES))
 
 @app.route("/cases/<int:case_id>/tax-update", methods=["GET", "POST"])
@@ -719,6 +860,14 @@ def tax_update(case_id):
         else:
             case.closed_at = None
         log_action(case, "Tax record updated", f"Workflow status: {old_status} → {case.workflow_status}; TRA status: {case.tra_status}")
+        if old_status != case.workflow_status:
+            _notify_initiator(case, f"status:{case.workflow_status}", "Request status updated", f"Your case {case.reference} status changed from {old_status} to {case.workflow_status}.")
+        if form.tax_notes.data and form.tax_notes.data.strip():
+            _notify_initiator(case, f"review-note:{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}", "Tax Compliance added a comment", f"A reviewer added an update to {case.reference}. Please open the case to review the latest comments.")
+        if case.workflow_status == "Returned for Clarification":
+            _notify_initiator(case, f"returned:{datetime.utcnow().strftime('%Y%m%d%H%M%S')}", "Action required: request returned", f"Case {case.reference} has been returned for clarification. Review the case notes and provide the required information.")
+        if case.workflow_status in ("TRA Approved", "TRA Rejected", "Closed"):
+            _notify_initiator(case, f"outcome:{case.workflow_status}", f"Request {case.workflow_status}", f"Your case {case.reference} is now marked {case.workflow_status}.")
         db.session.commit()
         flash("Tax tracking record updated.", "success")
         return redirect(url_for("case_detail", case_id=case.id))
@@ -1164,8 +1313,14 @@ def inject_globals():
         except Exception:
             # Keep the portal usable during first-time database initialization.
             unread_notification_count = 0
+    initiator_unread_count = 0
+    if session.get("role") == "initiator":
+        try:
+            initiator_unread_count = InitiatorNotification.query.filter_by(recipient_email=_initiator_email(), read_at=None).count()
+        except Exception:
+            initiator_unread_count = 0
     return {"current_role": session.get("role"), "current_actor": session.get("actor_name"),
-            "unread_notification_count": unread_notification_count}
+            "unread_notification_count": unread_notification_count, "initiator_unread_count": initiator_unread_count}
 
 with app.app_context():
     db.create_all()

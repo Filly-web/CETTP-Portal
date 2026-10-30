@@ -11,7 +11,7 @@
 <div class="form-section"><h2>02 · Customer and ownership</h2><div class="row g-3">
 <div class="col-md-6">{{ form.customer_name.label(class="form-label") }}{{ form.customer_name(class="form-control") }}{% for e in form.customer_name.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}</div>
 <div class="col-md-3">{{ form.customer_tin.label(class="form-label") }}{{ form.customer_tin(class="form-control") }}</div><div class="col-md-3">{{ form.underwriter.label(class="form-label") }}{{ form.underwriter(class="form-control") }}</div>
-<div class="col-md-6">{{ form.initiator_name.label(class="form-label") }}{{ form.initiator_name(class="form-control", placeholder="Name of person submitting this request") }}{% for e in form.initiator_name.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}</div>
+<div class="col-md-6">{{ form.initiator_name.label(class="form-label") }}{% if session.get('role') == 'initiator' %}<input class="form-control" value="{{ session.get('initiator_email', '') }}" readonly><div class="form-text">Your login email is recorded as the Initiator for traceability.</div>{% else %}{{ form.initiator_name(class="form-control", placeholder="Name of person submitting this request") }}{% for e in form.initiator_name.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}{% endif %}</div>
 </div></div>
 <div class="form-section"><h2>03 · Invoice and adjustment values</h2><p class="small text-muted">Enter values available at initiation. Tax Compliance can complete document references during review.</p><div class="row g-3">
 <div class="col-md-4">{{ form.original_invoice_no.label(class="form-label") }}{{ form.original_invoice_no(class="form-control") }}</div>
