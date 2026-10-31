@@ -39,6 +39,10 @@ db = SQLAlchemy(app)
 csrf = CSRFProtect(app)
 migrate = Migrate(app, db)
 
+# Integrated EFD-to-Invoice utility, available from the portal selection screen.
+from efd_portal import efd_bp
+app.register_blueprint(efd_bp, url_prefix="/efd-invoice")
+
 STATUSES = [
     "Initiated", "Under Tax Review", "Returned for Clarification",
     "Approved for TRA Processing", "Submitted to TRA", "TRA Approved",

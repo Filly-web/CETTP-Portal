@@ -1,13 +1,7 @@
-# CETTP enhancement: overdue monitoring, reconciliation review and compact UI
+# V1.9 – Initiator submission transaction fix
 
-- Added configurable overdue monitoring to the Tax Compliance dashboard. Open cases at or beyond `CETTP_OVERDUE_DAYS` are listed oldest-first; default threshold is 5 days. Closed cases are excluded.
-- Added Premium Register reconciliation summary cards for exact amount matches, different amount review cases, pure cancellations, and rows not yet linked to a CETTP case.
-- Clarified that policy/amount matching is a review suggestion and should be checked against dates, document numbers and existing cases before import.
-- Reduced general typography and button sizing for a more compact, professional interface while retaining responsive layouts.
-- No WHT reconciliation module added.
+- Corrected Initiator-side WTForms validation: the Initiator name is derived from the email-only session and is no longer incorrectly rejected when the hidden name field is absent from the submitted form.
+- Kept the Initiator name requirement for Tax Compliance submissions.
+- Made case creation, attachment persistence, audit logging and the Tax Compliance in-app notification part of one database transaction. If any part fails, the transaction rolls back and a server-side exception is logged.
+- Kept the existing email-only Initiator entry, mandatory cancelled invoice/EFD attachment, existing workflow, database URL and environment-variable configuration.
 
-## Configuration
-Optional Render environment variable: `CETTP_OVERDUE_DAYS=5`. Change the value to the agreed internal follow-up threshold.
-
-## Deployment note
-Deploy to the existing service only after backing up the production database and merging the package changes into the currently connected source. Review any existing custom CSS/template changes before replacing files.
