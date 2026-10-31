@@ -1,9 +1,10 @@
-# CETTP V2.0 – Case Editing and Returned Request Resubmission
+# Initiator email-only access (pilot)
 
-- Tax Compliance can edit submitted case details, including policy number, customer/insured name and TIN, request type, effective date, reason, product, branch, underwriter, invoice number and financial amounts.
-- Initiators can edit only cases in `Returned for Clarification` and resubmit them to `Under Tax Review`.
-- Initiator ownership checks remain enforced; an initiator cannot edit another initiator's case.
-- Case changes are recorded in the existing audit history.
-- Resubmission creates an in-app notification for Tax Compliance. Tax Compliance edits trigger an initiator notification.
-- Existing attachments remain attached. Editing does not require uploading the cancelled invoice/EFD again, but additional supporting documents can be added.
-- No database schema change is required; the existing case fields and notification tables are reused.
+- Initiators enter an email address without a password.
+- The email is stored in the session and recorded as the initiator identity on new cases.
+- Initiator name is read-only in the case form to keep attribution consistent.
+- Basic email format validation is applied.
+- Tax Compliance access behavior is unchanged.
+
+## Security limitation
+Email-only access does not authenticate or verify the person. Anyone can enter another person's email address. This should be limited to a controlled pilot and should not be treated as secure production access. Add verified email/SSO or password authentication before handling sensitive production records.

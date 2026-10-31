@@ -1,16 +1,19 @@
-# V1.1 enhancement: Premium Register cancellation tracker
-
-This package is based on the unchanged V1.1 CETTP application. It adds a separate Tax Compliance sidebar option for Premium Register cancellation and endorsement tracking.
+# CETTP V1.1 – Case Supporting Documents
 
 ## Added
-- Import standard unprotected `.xlsx`/`.xlsm` or `.csv` AIMS Premium Register files by detecting the `POLICY NO` and `GROSS PREMIUM` columns.
-- Pair negative and positive premium transactions by policy number; exact absolute amount matches are classified as `Matched amount`; a different positive amount is classified as a potential endorsement requiring review; no positive transaction on the policy is classified as `Pure cancellation`.
-- Record a mandatory cancellation/endorsement reason, TRA status and TRA reference per negative premium record.
-- Import selected or all unimported detected records into the existing CETTP Case workflow, retaining the detected amounts and classification in the tracker.
-- Export the cancellation tracker to Excel with reasons, TRA statuses/references and linked case references.
-- Download a CSV header template matching the AIMS Premium Register headings.
+- Case-level supporting-document register for cancellation and endorsement requests.
+- Upload categories: Original invoice; TRA cancellation note/approval; Credit note; Corrected/replacement invoice; Other supporting document.
+- Upload during initial request submission and later from the case details page.
+- Multiple files per category; PDF, PNG, JPG/JPEG, XLS/XLSX, DOC/DOCX and CSV accepted.
+- 12 MB per-file limit and 40 MB total request limit.
+- Documents stored as binary data in the configured SQL database, avoiding dependence on Render's ephemeral local filesystem.
+- Authenticated-by-role download routes and Tax Compliance-only removal from the active case list.
+- Upload metadata includes original filename, category, uploader, UTC timestamp, file size and MIME type.
+- Upload/removal actions are written to the case audit history. Removal is a soft-delete from the active list; the binary and audit metadata are retained.
+- Existing requests can receive supporting documents after submission. TRA notes and credit notes are not required at initiation because they may only be available later.
 
-## Controls and limitations
-- Pairing is a suggestion and must be checked against source documents before submission to TRA.
-- The imported source file previously supplied could not be read as a standard XLSX, so use an unprotected Excel workbook or CSV export.
-- This enhancement does not change the V1.1 database URI handling, PostgreSQL persistence behavior, Render configuration or `/health` behavior.
+## Deployment note
+The new `case_attachment` table is created by the application's existing `db.create_all()` startup initialization. For production environments using managed migrations, create and apply a migration for the new table before deployment. Back up the database regularly because file contents are stored in it.
+
+## Security note
+The feature uses the portal's existing role/access model. Before production use with sensitive documents, configure a strong `SECRET_KEY` and `TAX_ACCESS_CODE`, restrict access to authorised users, and confirm the organisation's document retention policy. Extension filtering is applied; this is not a malware scanner.
