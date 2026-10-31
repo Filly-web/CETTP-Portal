@@ -26,7 +26,7 @@
     <div class="sidebar-note"><strong>Compliance, made simpler.</strong>Prepare invoices with TRA verification details and a scannable QR code. Always check the details against the original TRA receipt.</div>
   </aside>
   <div class="main">
-    <header class="topbar"><div><div class="crumb">Workspace / Dashboard</div><div class="top-title">EFD Invoice Workspace</div></div><div class="user"><div class="avatar">TC</div><div><div class="user-name">Tax Compliance</div><div class="user-role">Britam Insurance (T) Ltd</div></div></div></header>
+    <header class="topbar"><div><div class="crumb">Workspace / Dashboard</div><div class="top-title">EFD Invoice Workspace</div></div><div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap"><a href="/" class="btn btn-secondary" style="padding:9px 13px">← Back to CETTP Portal</a><div class="user"><div class="avatar">TC</div><div><div class="user-name">Tax Compliance</div><div class="user-role">Britam Insurance (T) Ltd</div></div></div></div></header>
     <main class="content">
       {% with messages = get_flashed_messages(with_categories=true) %}{% for category, message in messages %}<div class="flash {{ category }}" role="alert">{{ message }}</div>{% endfor %}{% endwith %}
       <section class="welcome"><div><div class="eyebrow">Welcome back</div><h1>Welcome to Britam EFD Portal</h1><p>Prepare your invoice documents with TRA verification details and a QR code in a few simple steps.</p></div><div class="welcome-badge"><span class="shield">✓</span>Accurate details.<br>Clear verification.</div></section>
@@ -39,6 +39,7 @@
         <section class="panel" id="upload">
           <div class="panel-head"><div><h2>Process an invoice</h2><p class="panel-intro">Add the TRA receipt details to your Word invoice.</p></div><span class="pill">DOCX files</span></div>
           <form action="/efd-invoice/process" method="post" enctype="multipart/form-data" id="invoice-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="field"><label for="invoice">Invoice document</label><input id="invoice" name="invoice" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" required><small>Choose a Microsoft Word invoice (.docx), maximum file size 15 MB.</small></div>
             <div class="two-fields"><div class="field"><label for="verification_code">TRA verification code</label><input id="verification_code" name="verification_code" type="text" maxlength="100" placeholder="Enter verification code" required></div><div class="field"><label for="verification_time">Receipt time</label><input id="verification_time" name="verification_time" type="text" placeholder="HH:MM:SS" pattern="(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]|(?:[01][0-9]|2[0-3])[0-5][0-9][0-5][0-9]" title="Enter time as HH:MM:SS or HHMMSS" required><small>Example: 14:05:09 or 140509.</small></div></div>
             <div class="upload-hint"><strong>Placement tip:</strong> Add <code>&lt;&lt;EFD_SECTION&gt;&gt;</code> to your Word template where the EFD verification block should appear. If the marker is absent, the block is appended at the end. The QR code is centered.</div>
