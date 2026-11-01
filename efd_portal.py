@@ -192,7 +192,7 @@ def dashboard():
             "FROM processing_history ORDER BY id DESC LIMIT 8"
         ).fetchall()
 
-    return render_template("index.html", total=total, today=today, recent=recent)
+    return render_template("efd_portal/index.html", total=total, today=today, recent=recent)
 
 
 @efd_bp.route("/process", methods=["POST"])
@@ -274,7 +274,7 @@ def history():
             SELECT id, created_at, filename, verification_code, receipt_time
             FROM processing_history ORDER BY id DESC LIMIT 250
         """).fetchall()
-    return render_template("history.html", rows=rows)
+    return render_template("efd_portal/history.html", rows=rows)
 
 
 @efd_bp.app_errorhandler(413)
