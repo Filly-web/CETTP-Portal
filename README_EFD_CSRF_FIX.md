@@ -1,20 +1,18 @@
-# V2.5 – Compliance Calendar workspace integration and deadline scheduling
+# EFD invoice generation – CSRF fix and CETTP return link
 
-## Changes
-- Removed the standalone Tax Compliance Calendar service card from the public portal landing page.
-- Removed the calendar from the global sidebar. Tax Compliance officers now open it from the **Tax Compliance Tools** card on the Tax Compliance Workspace dashboard.
-- Added automatic, duplicate-safe generation of recurring deadlines for the current and following calendar year:
-  - WHT, PAYE and SDL returns: 7th of each month.
-  - VAT return: 20th of each month.
-  - Corporate income tax annual return: 30 June each year.
-  - Corporate income tax provisional return: 31 March each year.
-  - Corporate income tax instalment payments: 31 March, 30 June, 30 September and 31 December each year.
-- Recurring dates are schedule-controlled. Officers can update assignment, status, filing/completion date, payment amount, control number, notes and evidence, but cannot change the scheduled due date.
-- Added one-time manual deadline categories for Tax Audit, Tax Objection, Tax Appeal, Demand Notice, TRA Verification and other matters.
-- Added milestone/activity choices including notification received, information request, response to information request, response to audit findings, exit meeting, objection filing, appeal filing, demand notice response, hearing and follow-up.
-- Existing deadline, audit and attachment tables are reused; no database schema migration is introduced.
+This package fixes the `Bad Request: The CSRF token is missing` error when processing an invoice in the EFD-to-Invoice Portal.
 
-## Important
-- The schedule follows the dates supplied by the user. Tax Compliance should validate statutory applicability and dates against current TRA requirements before relying on them.
-- Recurring records are generated when the calendar is first opened after deployment. The generator is idempotent and will not create duplicate recurring records for the same obligation, activity, period and due date.
-- Existing database URL and Render service configuration should remain unchanged. Back up the production database before deployment.
+## What changed
+1. The EFD invoice form now submits the CSRF token required by the application's global Flask-WTF CSRF protection.
+2. The EFD dashboard and processing history page now have a **Back to CETTP Portal** link.
+3. The EFD processing route remains CSRF-protected; security has not been disabled.
+
+## Deploy to the existing Render service
+1. Back up your current database and source repository.
+2. Extract this ZIP and copy its contents to the root of the existing `Filly-web/SmartCETTP` repository, preserving the `templates/` and `static/` folders.
+3. Commit and push the changes to the existing branch.
+4. Keep the existing Render service and environment variables, especially `DATABASE_URL`, `SECRET_KEY`, and `EFD_PORTAL_DATA_DIR`, unchanged.
+5. Redeploy the existing service. The build command should remain `pip install -r requirements.txt`; the start command should remain `gunicorn app:app` if `app.py` exposes `app`.
+6. After deployment, open `/efd-invoice/` afresh, upload a `.docx`, enter the TRA verification code and receipt time, then process the invoice. The form will include a fresh CSRF token from that page load.
+
+Do not add `@csrf.exempt` to the EFD processing route and do not disable global CSRF protection.
