@@ -1,12 +1,9 @@
-# EFD template fix — deployment notes
+# V2.6 – Month-specific compliance calendar and separate TRA/ZRA VAT
 
-The EFD portal's templates are explicitly namespaced to prevent collisions with CETTP templates of the same name.
-
-- Dashboard: `templates/efd_portal/index.html`
-- Processing history: `templates/efd_portal/history.html`
-
-Render settings (assuming `app.py` defines `app` at repository root):
-- Build command: `pip install -r requirements.txt`
-- Start command: `gunicorn app:app`
-
-Do not change the existing database URL or create a new service for this fix. Back up existing databases before replacing files. After deployment, test Initiator login, Tax Compliance login, EFD invoice generation, EFD history, and Back to CETTP navigation.
+- Compliance Calendar now defaults to the current month and displays only deadlines due within that month.
+- Added previous/next month navigation. Month and year selections are retained when filtering by tax type or status.
+- Dashboard counters (due in 7 days, due today, overdue, payment pending and completed) are calculated only from obligations in the selected month.
+- Monthly VAT obligations are generated separately as TRA VAT Return and ZRA VAT Return, both due on the 20th.
+- Existing system-generated generic VAT Return records are upgraded in place to TRA VAT Return to avoid duplicate TRA VAT rows; ZRA VAT is added as a separate obligation.
+- Manual deadlines remain visible in the month in which their due date falls.
+- No new database tables or migrations are introduced.

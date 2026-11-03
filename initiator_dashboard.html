@@ -1,11 +1,31 @@
-{% extends "base.html" %}{% block title %}Initiator Dashboard | CETTP{% endblock %}
+{% extends "base.html" %}
+{% block title %}Notifications | CETTP{% endblock %}
 {% block content %}
-<div class="d-flex flex-wrap justify-content-between align-items-end gap-3 mb-4"><div><div class="eyebrow">INITIATOR WORKSPACE</div><h1 class="page-title">Welcome to CETTP</h1><p class="text-muted mb-0">Cancellation &amp; Endorsement Tracking Portal · {{ current_actor }}</p></div><a href="{{ url_for('new_case') }}" class="btn btn-primary">＋ New request</a></div>
-<div class="row g-3 mb-4">
-{% set cards = [('My Requests','all',url_for('cases'), 'All requests you have submitted'),('Drafts','drafts',url_for('cases',status='Draft'),'Requests saved but not submitted'),('Awaiting Review','awaiting',url_for('cases',status='Initiated'),'Requests waiting for Tax Compliance'),('Returned to Me','returned',url_for('cases',status='Returned for Clarification'),'Requests needing corrections'),('Completed','completed',url_for('cases',status='Closed'),'Completed requests'),('Overdue','overdue',url_for('cases',overdue='1'),'Open requests pending for more than ' ~ overdue_days ~ ' days') ] %}
-{% for title,key,link,description in cards %}<div class="col-6 col-xl-4"><a href="{{ link }}" class="text-decoration-none"><div class="panel h-100 p-3"><div class="d-flex justify-content-between align-items-start"><span class="small text-muted">{{ title }}</span><span class="badge rounded-pill {% if key == 'overdue' and counts[key] %}bg-danger{% else %}bg-light text-dark{% endif %}">{{ counts[key] }}</span></div><div class="small text-muted mt-2">{{ description }}</div></div></a></div>{% endfor %}
+<div class="page-heading">
+  <div><div class="eyebrow">TAX COMPLIANCE WORKSPACE</div><h1 class="page-title">Notifications</h1><p class="text-muted mb-0">New cancellation and endorsement requests submitted by Initiators.</p></div>
+  <div class="d-flex gap-2"><form method="post" action="{{ url_for('mark_all_notifications_read') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-outline-primary" type="submit" {% if unread_count == 0 %}disabled{% endif %}>Mark all as read</button></form><a class="btn btn-primary" href="{{ url_for('dashboard') }}">Back to dashboard</a></div>
 </div>
-<div class="panel mb-4"><div class="d-flex justify-content-between align-items-center mb-3"><div><h2 class="h5 mb-1">Recent requests</h2><p class="small text-muted mb-0">Your requests only. Open a case to review documents, history and Tax Compliance comments.</p></div><a href="{{ url_for('cases') }}" class="btn btn-outline-secondary btn-sm">View all</a></div>
-<div class="table-responsive"><table class="table align-middle"><thead><tr><th>Case reference</th><th>Type</th><th>Policy</th><th>Submitted</th><th>Status</th><th></th></tr></thead><tbody>{% for c in recent %}<tr><td class="fw-semibold">{{ c.reference }}</td><td>{{ c.case_type }}</td><td>{{ c.policy_number }}</td><td>{{ c.created_at.strftime('%d %b %Y') if c.created_at else '—' }}</td><td><span class="badge bg-light text-dark">{{ c.workflow_status }}</span></td><td><a class="btn btn-outline-primary btn-sm" href="{{ url_for('case_detail',case_id=c.id) }}">View</a></td></tr>{% else %}<tr><td colspan="6" class="text-center text-muted py-4">No requests yet. Start by creating your first request.</td></tr>{% endfor %}</tbody></table></div></div>
-<div class="alert alert-info small">You can edit drafts and respond to requests returned for clarification. Submitted cases are read-only while under review; only Tax Compliance can approve requests or update TRA status.</div>
+<div class="panel">
+  <div class="panel-heading"><div><h2>Request alerts</h2><p>Unread notifications are highlighted until you open the case.</p></div><span class="panel-badge blue-badge">{{ notifications|length }} RECENT</span></div>
+  {% if notifications %}
+  <div class="list-group list-group-flush">
+    {% for item in notifications %}
+    {% set is_read = item.id in read_ids %}
+    <div class="list-group-item px-0 py-3 {% if not is_read %}bg-light{% endif %}">
+      <div class="d-flex align-items-start gap-3">
+        <div class="rounded-circle d-flex align-items-center justify-content-center flex-shrink-0 {% if is_read %}bg-secondary-subtle text-secondary{% else %}bg-primary-subtle text-primary{% endif %}" style="width:42px;height:42px">{% if item.title.lower().find('cancellation') >= 0 %}↩{% else %}✎{% endif %}</div>
+        <div class="flex-grow-1">
+          <div class="d-flex flex-wrap align-items-center gap-2"><strong>{{ item.title }}</strong>{% if is_read %}<span class="badge text-bg-secondary">Read</span>{% else %}<span class="badge text-bg-primary">Unread</span>{% endif %}</div>
+          <p class="mb-1 mt-1">{{ item.message }}</p>
+          <div class="small text-muted">{{ item.case_reference }} · {{ item.created_at.strftime('%d %b %Y, %H:%M UTC') }}</div>
+        </div>
+        <form method="post" action="{{ url_for('mark_notification_read', notification_id=item.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm {% if is_read %}btn-outline-secondary{% else %}btn-primary{% endif %}" type="submit">{% if is_read %}Open case{% else %}Review request{% endif %}</button></form>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="text-center py-5"><div class="display-6 mb-2">🔔</div><h3 class="h5">No notifications yet</h3><p class="text-muted mb-0">New cancellation and endorsement requests will appear here automatically.</p></div>
+  {% endif %}
+</div>
 {% endblock %}
