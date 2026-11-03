@@ -108,3 +108,7 @@ These notifications work without configuring Microsoft 365 or any email address.
 The home page now offers three entry options: Initiator Workspace, Tax Compliance Workspace, and EFD-to-Invoice Portal. The EFD utility is mounted under `/efd-invoice/` and does not replace CETTP case workflows. It processes Word `.docx` invoice templates, adds TRA verification details and a QR code, and records processing history in a separate SQLite database.
 
 Set `EFD_PORTAL_DATA_DIR` to a persistent writable directory if EFD processing history must survive redeployments. Without a persistent disk or external database, SQLite history stored on an ephemeral host filesystem can be lost. This EFD utility currently has no separate login, so restrict access using the organisation's approved access controls before exposing it outside the intended internal users.
+
+
+## Tax Compliance Calendar & Monitoring (V2.4)
+The portal now includes a Tax Compliance Calendar for manually maintained filing and payment obligations. Tax Compliance can create/edit obligations, assign owners, track due dates/statuses, attach evidence, view audit history, and export the register to CSV. Dates are deliberately not hard-coded: validate each deadline against current TRA requirements. Background email/push reminders and automatic recurring-period generation are not part of this release. The three new calendar tables are created by the existing `db.create_all()` startup call; back up the production database before deployment.

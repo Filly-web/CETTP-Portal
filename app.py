@@ -214,6 +214,47 @@ class CaseAttachment(db.Model):
     case = db.relationship("Case", backref=db.backref("attachments", lazy=True, cascade="all, delete-orphan"))
 
 
+class TaxDeadline(db.Model):
+    """A filing or payment obligation tracked by Tax Compliance."""
+    id = db.Column(db.Integer, primary_key=True)
+    obligation = db.Column(db.String(140), nullable=False, index=True)
+    tax_type = db.Column(db.String(40), nullable=False, index=True)
+    activity = db.Column(db.String(20), nullable=False, default="Filing")  # Filing / Payment
+    period = db.Column(db.String(30), nullable=False, index=True)
+    due_date = db.Column(db.Date, nullable=False, index=True)
+    assigned_to = db.Column(db.String(120))
+    status = db.Column(db.String(40), nullable=False, default="Upcoming", index=True)
+    completed_date = db.Column(db.Date)
+    payment_amount = db.Column(db.Numeric(16,2))
+    control_number = db.Column(db.String(100))
+    notes = db.Column(db.Text)
+    created_by = db.Column(db.String(120), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class TaxDeadlineAudit(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    deadline_id = db.Column(db.Integer, db.ForeignKey("tax_deadline.id", ondelete="CASCADE"), nullable=False, index=True)
+    actor = db.Column(db.String(120), nullable=False)
+    action = db.Column(db.String(80), nullable=False)
+    details = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    deadline = db.relationship("TaxDeadline", backref=db.backref("audit_entries", lazy=True, cascade="all, delete-orphan"))
+
+
+class TaxDeadlineAttachment(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    deadline_id = db.Column(db.Integer, db.ForeignKey("tax_deadline.id", ondelete="CASCADE"), nullable=False, index=True)
+    filename = db.Column(db.String(255), nullable=False)
+    content_type = db.Column(db.String(120), nullable=False, default="application/octet-stream")
+    file_size = db.Column(db.Integer, nullable=False)
+    file_data = db.Column(db.LargeBinary, nullable=False)
+    uploaded_by = db.Column(db.String(120), nullable=False)
+    uploaded_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    deadline = db.relationship("TaxDeadline", backref=db.backref("attachments", lazy=True, cascade="all, delete-orphan"))
+
+
 class CaseForm(FlaskForm):
     case_type = SelectField("Request type", choices=TYPES, validators=[DataRequired()])
     policy_number = StringField("Policy number", validators=[DataRequired(), Length(max=80)])
@@ -1356,6 +1397,153 @@ def cancellation_tracker_template():
     headers=["TRANSACTION DATE","NO","CLASS","PRODUCT","PERIOD","POLICY NO","ENDORSEMENT NO","TOTAL","TRANSACTION TYPE","OLD POLICY RENEWAL","OLD POLICY NO","BUSINESS TYPE","CLASSIFICATION","NAME OF INSURED","BRANCH","BRANCH NAME","INTERMEDIARY CODE","INTERMEDIARY NAME","CHANNEL","EFFECTIVE DATE","PERIOD FROM","EXPIRING","CURRENCY","CURRENCY RATE","SUM INSURED","EFFECTIVE SUM INSURED","GROSS PREMIUM","AMT","NETT PREMIUM","COMM AMT","PREMIUM STATUS"]
     out=io.StringIO(); csv.writer(out).writerow(headers); data=io.BytesIO(out.getvalue().encode("utf-8-sig")); data.seek(0)
     return send_file(data,mimetype="text/csv",as_attachment=True,download_name="AIMS_Premium_Register_import_template.csv")
+
+
+# ---------------------------------------------------------------------------
+# Tax Compliance Calendar & Monitoring
+# ---------------------------------------------------------------------------
+TAX_DEADLINE_STATUSES = ["Upcoming", "In Progress", "Pending Review", "Filed - Payment Pending", "Completed", "Not Applicable"]
+TAX_DEADLINE_TYPES = ["VAT", "PAYE", "SDL", "WHT", "Corporate Income Tax", "Transfer Pricing", "Insurance Regulatory", "Other"]
+TAX_DEADLINE_EXTENSIONS = {"pdf", "png", "jpg", "jpeg", "xlsx", "xls", "doc", "docx", "csv"}
+
+def _tax_calendar_required():
+    if session.get("role") != "tax":
+        return False
+    return True
+
+def _deadline_audit(item, action, details=""):
+    db.session.add(TaxDeadlineAudit(deadline_id=item.id, actor=(session.get("actor_name") or "Tax Compliance")[:120], action=action, details=details[:4000]))
+
+def _deadline_status(item, today=None):
+    today = today or date.today()
+    if item.status not in ("Completed", "Not Applicable") and item.due_date < today:
+        return "Overdue"
+    return item.status
+
+@app.route("/tax-calendar")
+def tax_calendar():
+    if not _tax_calendar_required(): return redirect(url_for("home"))
+    today = date.today()
+    q = TaxDeadline.query
+    selected_status = request.args.get("status", "").strip()
+    selected_type = request.args.get("tax_type", "").strip()
+    if selected_type: q = q.filter_by(tax_type=selected_type)
+    if selected_status == "Overdue":
+        q = q.filter(TaxDeadline.due_date < today, TaxDeadline.status.notin_(["Completed", "Not Applicable"]))
+    elif selected_status: q = q.filter_by(status=selected_status)
+    rows = q.order_by(TaxDeadline.due_date.asc(), TaxDeadline.obligation.asc()).all()
+    all_rows = TaxDeadline.query.all()
+    counts = {
+        "upcoming": sum(1 for x in all_rows if x.due_date >= today and x.due_date <= today + timedelta(days=7) and x.status not in ("Completed", "Not Applicable")),
+        "today": sum(1 for x in all_rows if x.due_date == today and x.status not in ("Completed", "Not Applicable")),
+        "overdue": sum(1 for x in all_rows if x.due_date < today and x.status not in ("Completed", "Not Applicable")),
+        "pending": sum(1 for x in all_rows if x.status == "Filed - Payment Pending"),
+        "completed": sum(1 for x in all_rows if x.status == "Completed"),
+    }
+    return render_template("tax_calendar.html", deadlines=rows, counts=counts, today=today,
+        statuses=TAX_DEADLINE_STATUSES, tax_types=TAX_DEADLINE_TYPES,
+        selected_status=selected_status, selected_type=selected_type, deadline_status=_deadline_status)
+
+@app.route("/tax-calendar/new", methods=["GET", "POST"])
+def tax_deadline_new():
+    if not _tax_calendar_required(): return redirect(url_for("home"))
+    if request.method == "POST":
+        try:
+            due = date.fromisoformat(request.form.get("due_date", ""))
+        except ValueError:
+            flash("Please enter a valid due date.", "danger")
+            return render_template("tax_deadline_form.html", item=None, tax_types=TAX_DEADLINE_TYPES, statuses=TAX_DEADLINE_STATUSES)
+        obligation = request.form.get("obligation", "").strip()
+        period = request.form.get("period", "").strip()
+        tax_type = request.form.get("tax_type", "Other").strip()
+        activity = request.form.get("activity", "Filing").strip()
+        status = request.form.get("status", "Upcoming").strip()
+        if not obligation or not period or tax_type not in TAX_DEADLINE_TYPES or activity not in ("Filing", "Payment") or status not in TAX_DEADLINE_STATUSES:
+            flash("Complete all required fields using the available options.", "danger")
+            return render_template("tax_deadline_form.html", item=None, tax_types=TAX_DEADLINE_TYPES, statuses=TAX_DEADLINE_STATUSES)
+        item = TaxDeadline(obligation=obligation[:140], tax_type=tax_type, activity=activity, period=period[:30], due_date=due,
+            assigned_to=request.form.get("assigned_to", "").strip()[:120] or None, status=status,
+            completed_date=(date.fromisoformat(request.form["completed_date"]) if request.form.get("completed_date") else None),
+            payment_amount=(Decimal(request.form["payment_amount"]) if request.form.get("payment_amount") else None),
+            control_number=request.form.get("control_number", "").strip()[:100] or None,
+            notes=request.form.get("notes", "").strip(), created_by=(session.get("actor_name") or "Tax Compliance")[:120])
+        db.session.add(item); db.session.flush(); _deadline_audit(item, "Created", f"Obligation created with due date {due.isoformat()}.")
+        db.session.commit(); flash("Tax obligation added to the compliance calendar.", "success")
+        return redirect(url_for("tax_calendar"))
+    return render_template("tax_deadline_form.html", item=None, tax_types=TAX_DEADLINE_TYPES, statuses=TAX_DEADLINE_STATUSES)
+
+@app.route("/tax-calendar/<int:deadline_id>/edit", methods=["GET", "POST"])
+def tax_deadline_edit(deadline_id):
+    if not _tax_calendar_required(): return redirect(url_for("home"))
+    item = TaxDeadline.query.get_or_404(deadline_id)
+    if request.method == "POST":
+        try: due = date.fromisoformat(request.form.get("due_date", ""))
+        except ValueError:
+            flash("Please enter a valid due date.", "danger")
+            return render_template("tax_deadline_form.html", item=item, tax_types=TAX_DEADLINE_TYPES, statuses=TAX_DEADLINE_STATUSES)
+        old_due, old_status = item.due_date, item.status
+        old_assignee = item.assigned_to
+        item.obligation=request.form.get("obligation", "").strip()[:140]
+        item.tax_type=request.form.get("tax_type", "Other").strip()
+        item.activity=request.form.get("activity", "Filing").strip()
+        item.period=request.form.get("period", "").strip()[:30]
+        item.due_date=due
+        item.assigned_to=request.form.get("assigned_to", "").strip()[:120] or None
+        item.status=request.form.get("status", "Upcoming").strip()
+        item.completed_date=date.fromisoformat(request.form["completed_date"]) if request.form.get("completed_date") else None
+        item.payment_amount=Decimal(request.form["payment_amount"]) if request.form.get("payment_amount") else None
+        item.control_number=request.form.get("control_number", "").strip()[:100] or None
+        item.notes=request.form.get("notes", "").strip()
+        if not item.obligation or not item.period or item.tax_type not in TAX_DEADLINE_TYPES or item.activity not in ("Filing", "Payment") or item.status not in TAX_DEADLINE_STATUSES:
+            flash("Please check the required fields.", "danger")
+            return render_template("tax_deadline_form.html", item=item, tax_types=TAX_DEADLINE_TYPES, statuses=TAX_DEADLINE_STATUSES)
+        changes=[]
+        if old_due != due: changes.append(f"Due date: {old_due} → {due}")
+        if old_status != item.status: changes.append(f"Status: {old_status} → {item.status}")
+        if old_assignee != item.assigned_to: changes.append(f"Assigned to: {old_assignee or 'Unassigned'} → {item.assigned_to or 'Unassigned'}")
+        _deadline_audit(item, "Updated", "; ".join(changes) or "Obligation details updated.")
+        db.session.commit(); flash("Obligation updated successfully.", "success")
+        return redirect(url_for("tax_calendar_detail", deadline_id=item.id))
+    return render_template("tax_deadline_form.html", item=item, tax_types=TAX_DEADLINE_TYPES, statuses=TAX_DEADLINE_STATUSES)
+
+@app.route("/tax-calendar/<int:deadline_id>")
+def tax_calendar_detail(deadline_id):
+    if not _tax_calendar_required(): return redirect(url_for("home"))
+    item=TaxDeadline.query.get_or_404(deadline_id)
+    return render_template("tax_deadline_detail.html", item=item, deadline_status=_deadline_status)
+
+@app.route("/tax-calendar/<int:deadline_id>/attachments", methods=["POST"])
+def tax_deadline_attachment(deadline_id):
+    if not _tax_calendar_required(): return redirect(url_for("home"))
+    item=TaxDeadline.query.get_or_404(deadline_id)
+    f=request.files.get("document")
+    if not f or not f.filename:
+        flash("Choose a document to upload.", "warning"); return redirect(url_for("tax_calendar_detail", deadline_id=item.id))
+    filename=secure_filename(f.filename)
+    ext=filename.rsplit(".",1)[-1].lower() if "." in filename else ""
+    data=f.read()
+    if ext not in TAX_DEADLINE_EXTENSIONS or len(data)>MAX_ATTACHMENT_BYTES:
+        flash("Unsupported file type or file exceeds the 12 MB limit.", "danger"); return redirect(url_for("tax_calendar_detail", deadline_id=item.id))
+    db.session.add(TaxDeadlineAttachment(deadline_id=item.id, filename=filename[:255], content_type=f.mimetype or "application/octet-stream", file_size=len(data), file_data=data, uploaded_by=(session.get("actor_name") or "Tax Compliance")[:120]))
+    _deadline_audit(item, "Evidence uploaded", filename)
+    db.session.commit(); flash("Supporting document uploaded.", "success")
+    return redirect(url_for("tax_calendar_detail", deadline_id=item.id))
+
+@app.route("/tax-calendar/attachments/<int:attachment_id>/download")
+def tax_deadline_attachment_download(attachment_id):
+    if not _tax_calendar_required(): return redirect(url_for("home"))
+    a=TaxDeadlineAttachment.query.get_or_404(attachment_id)
+    return send_file(BytesIO(a.file_data), as_attachment=True, download_name=a.filename, mimetype=a.content_type)
+
+@app.route("/tax-calendar/export.csv")
+def tax_calendar_export():
+    if not _tax_calendar_required(): return redirect(url_for("home"))
+    output=io.StringIO(); writer=csv.writer(output)
+    writer.writerow(["Obligation", "Tax Type", "Activity", "Period", "Due Date", "Assigned To", "Status", "Completed Date", "Payment Amount (TZS)", "Control Number", "Notes"])
+    for x in TaxDeadline.query.order_by(TaxDeadline.due_date.asc()).all():
+        writer.writerow([x.obligation,x.tax_type,x.activity,x.period,x.due_date,x.assigned_to or "",_deadline_status(x),x.completed_date or "",x.payment_amount or "",x.control_number or "",x.notes or ""])
+    return send_file(BytesIO(output.getvalue().encode("utf-8-sig")), mimetype="text/csv", as_attachment=True, download_name=f"tax_compliance_calendar_{date.today().isoformat()}.csv")
+
 
 @app.route("/health")
 def health():
