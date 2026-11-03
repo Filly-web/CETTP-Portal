@@ -1403,8 +1403,56 @@ def cancellation_tracker_template():
 # Tax Compliance Calendar & Monitoring
 # ---------------------------------------------------------------------------
 TAX_DEADLINE_STATUSES = ["Upcoming", "In Progress", "Pending Review", "Filed - Payment Pending", "Completed", "Not Applicable"]
-TAX_DEADLINE_TYPES = ["VAT", "PAYE", "SDL", "WHT", "Corporate Income Tax", "Transfer Pricing", "Insurance Regulatory", "Other"]
+TAX_DEADLINE_TYPES = ["VAT", "PAYE", "SDL", "WHT", "Corporate Income Tax", "Tax Audit", "Tax Objection", "Tax Appeal", "Demand Notice", "TRA Verification", "Transfer Pricing", "Insurance Regulatory", "Other"]
+TAX_DEADLINE_ACTIVITIES = ["Filing", "Payment", "Notification received", "Information request", "Response to information request", "Response to audit findings", "Exit meeting", "Objection filing", "Appeal filing", "Demand notice response", "Hearing", "Follow-up", "Other milestone"]
+RECURRING_DEADLINE_OWNER = "SYSTEM - RECURRING SCHEDULE"
 TAX_DEADLINE_EXTENSIONS = {"pdf", "png", "jpg", "jpeg", "xlsx", "xls", "doc", "docx", "csv"}
+
+def _month_label(year, month):
+    return date(year, month, 1).strftime("%B %Y")
+
+
+def _ensure_recurring_tax_deadlines():
+    """Create the configured monthly/annual schedule once; officers update each generated record."""
+    today = date.today()
+    start_year = today.year
+    end_year = today.year + 1
+    for year in range(start_year, end_year + 1):
+        for month in range(1, 13):
+            due_month = date(year, month, 1)
+            prior_month = 12 if month == 1 else month - 1
+            prior_year = year - 1 if month == 1 else year
+            period = _month_label(prior_year, prior_month)
+            monthly = [("WHT", 7), ("PAYE", 7), ("SDL", 7), ("VAT", 20)]
+            for tax_type, day in monthly:
+                due = date(year, month, day)
+                obligation = f"{tax_type} Return"
+                exists = TaxDeadline.query.filter_by(obligation=obligation, tax_type=tax_type,
+                    activity="Filing", period=period, due_date=due,
+                    created_by=RECURRING_DEADLINE_OWNER).first()
+                if not exists:
+                    db.session.add(TaxDeadline(obligation=obligation, tax_type=tax_type,
+                        activity="Filing", period=period, due_date=due,
+                        status="Upcoming", created_by=RECURRING_DEADLINE_OWNER,
+                        notes="System-generated recurring deadline. Update status and attach filing/payment evidence."))
+        # Annual corporate income tax return and provisional return.
+        annual_items = [
+            ("Corporate Income Tax - Annual Return", "Corporate Income Tax", "Filing", date(year, 6, 30), f"Year {year - 1}"),
+            ("Corporate Income Tax - Provisional Return", "Corporate Income Tax", "Filing", date(year, 3, 31), f"Year {year}"),
+        ]
+        for quarter, due in [("Q1", date(year, 3, 31)), ("Q2", date(year, 6, 30)), ("Q3", date(year, 9, 30)), ("Q4", date(year, 12, 31))]:
+            annual_items.append((f"Corporate Income Tax - Instalment ({quarter})", "Corporate Income Tax", "Payment", due, f"{year} {quarter}"))
+        for obligation, tax_type, activity, due, period in annual_items:
+            exists = TaxDeadline.query.filter_by(obligation=obligation, tax_type=tax_type,
+                activity=activity, period=period, due_date=due,
+                created_by=RECURRING_DEADLINE_OWNER).first()
+            if not exists:
+                db.session.add(TaxDeadline(obligation=obligation, tax_type=tax_type,
+                    activity=activity, period=period, due_date=due, status="Upcoming",
+                    created_by=RECURRING_DEADLINE_OWNER,
+                    notes="System-generated recurring deadline. Confirm statutory applicability and update status/evidence."))
+    db.session.commit()
+
 
 def _tax_calendar_required():
     if session.get("role") != "tax":
@@ -1423,6 +1471,7 @@ def _deadline_status(item, today=None):
 @app.route("/tax-calendar")
 def tax_calendar():
     if not _tax_calendar_required(): return redirect(url_for("home"))
+    _ensure_recurring_tax_deadlines()
     today = date.today()
     q = TaxDeadline.query
     selected_status = request.args.get("status", "").strip()
@@ -1452,15 +1501,15 @@ def tax_deadline_new():
             due = date.fromisoformat(request.form.get("due_date", ""))
         except ValueError:
             flash("Please enter a valid due date.", "danger")
-            return render_template("tax_deadline_form.html", item=None, tax_types=TAX_DEADLINE_TYPES, statuses=TAX_DEADLINE_STATUSES)
+            return render_template("tax_deadline_form.html", item=None, tax_types=TAX_DEADLINE_TYPES, statuses=TAX_DEADLINE_STATUSES, activities=TAX_DEADLINE_ACTIVITIES)
         obligation = request.form.get("obligation", "").strip()
         period = request.form.get("period", "").strip()
         tax_type = request.form.get("tax_type", "Other").strip()
         activity = request.form.get("activity", "Filing").strip()
         status = request.form.get("status", "Upcoming").strip()
-        if not obligation or not period or tax_type not in TAX_DEADLINE_TYPES or activity not in ("Filing", "Payment") or status not in TAX_DEADLINE_STATUSES:
+        if not obligation or not period or tax_type not in TAX_DEADLINE_TYPES or activity not in TAX_DEADLINE_ACTIVITIES or status not in TAX_DEADLINE_STATUSES:
             flash("Complete all required fields using the available options.", "danger")
-            return render_template("tax_deadline_form.html", item=None, tax_types=TAX_DEADLINE_TYPES, statuses=TAX_DEADLINE_STATUSES)
+            return render_template("tax_deadline_form.html", item=None, tax_types=TAX_DEADLINE_TYPES, statuses=TAX_DEADLINE_STATUSES, activities=TAX_DEADLINE_ACTIVITIES)
         item = TaxDeadline(obligation=obligation[:140], tax_type=tax_type, activity=activity, period=period[:30], due_date=due,
             assigned_to=request.form.get("assigned_to", "").strip()[:120] or None, status=status,
             completed_date=(date.fromisoformat(request.form["completed_date"]) if request.form.get("completed_date") else None),
@@ -1470,7 +1519,7 @@ def tax_deadline_new():
         db.session.add(item); db.session.flush(); _deadline_audit(item, "Created", f"Obligation created with due date {due.isoformat()}.")
         db.session.commit(); flash("Tax obligation added to the compliance calendar.", "success")
         return redirect(url_for("tax_calendar"))
-    return render_template("tax_deadline_form.html", item=None, tax_types=TAX_DEADLINE_TYPES, statuses=TAX_DEADLINE_STATUSES)
+    return render_template("tax_deadline_form.html", item=None, tax_types=TAX_DEADLINE_TYPES, statuses=TAX_DEADLINE_STATUSES, activities=TAX_DEADLINE_ACTIVITIES)
 
 @app.route("/tax-calendar/<int:deadline_id>/edit", methods=["GET", "POST"])
 def tax_deadline_edit(deadline_id):
@@ -1480,23 +1529,27 @@ def tax_deadline_edit(deadline_id):
         try: due = date.fromisoformat(request.form.get("due_date", ""))
         except ValueError:
             flash("Please enter a valid due date.", "danger")
-            return render_template("tax_deadline_form.html", item=item, tax_types=TAX_DEADLINE_TYPES, statuses=TAX_DEADLINE_STATUSES)
+            return render_template("tax_deadline_form.html", item=item, tax_types=TAX_DEADLINE_TYPES, statuses=TAX_DEADLINE_STATUSES, activities=TAX_DEADLINE_ACTIVITIES)
         old_due, old_status = item.due_date, item.status
         old_assignee = item.assigned_to
-        item.obligation=request.form.get("obligation", "").strip()[:140]
-        item.tax_type=request.form.get("tax_type", "Other").strip()
-        item.activity=request.form.get("activity", "Filing").strip()
-        item.period=request.form.get("period", "").strip()[:30]
-        item.due_date=due
+        if item.created_by != RECURRING_DEADLINE_OWNER:
+            item.obligation=request.form.get("obligation", "").strip()[:140]
+            item.tax_type=request.form.get("tax_type", "Other").strip()
+            item.activity=request.form.get("activity", "Other milestone").strip()
+            item.period=request.form.get("period", "").strip()[:30]
+            item.due_date=due
+        else:
+            # Recurring statutory dates are schedule-controlled; officers update progress and evidence only.
+            due = item.due_date
         item.assigned_to=request.form.get("assigned_to", "").strip()[:120] or None
         item.status=request.form.get("status", "Upcoming").strip()
         item.completed_date=date.fromisoformat(request.form["completed_date"]) if request.form.get("completed_date") else None
         item.payment_amount=Decimal(request.form["payment_amount"]) if request.form.get("payment_amount") else None
         item.control_number=request.form.get("control_number", "").strip()[:100] or None
         item.notes=request.form.get("notes", "").strip()
-        if not item.obligation or not item.period or item.tax_type not in TAX_DEADLINE_TYPES or item.activity not in ("Filing", "Payment") or item.status not in TAX_DEADLINE_STATUSES:
+        if not item.obligation or not item.period or item.tax_type not in TAX_DEADLINE_TYPES or item.activity not in TAX_DEADLINE_ACTIVITIES or item.status not in TAX_DEADLINE_STATUSES:
             flash("Please check the required fields.", "danger")
-            return render_template("tax_deadline_form.html", item=item, tax_types=TAX_DEADLINE_TYPES, statuses=TAX_DEADLINE_STATUSES)
+            return render_template("tax_deadline_form.html", item=item, tax_types=TAX_DEADLINE_TYPES, statuses=TAX_DEADLINE_STATUSES, activities=TAX_DEADLINE_ACTIVITIES)
         changes=[]
         if old_due != due: changes.append(f"Due date: {old_due} → {due}")
         if old_status != item.status: changes.append(f"Status: {old_status} → {item.status}")
@@ -1504,7 +1557,7 @@ def tax_deadline_edit(deadline_id):
         _deadline_audit(item, "Updated", "; ".join(changes) or "Obligation details updated.")
         db.session.commit(); flash("Obligation updated successfully.", "success")
         return redirect(url_for("tax_calendar_detail", deadline_id=item.id))
-    return render_template("tax_deadline_form.html", item=item, tax_types=TAX_DEADLINE_TYPES, statuses=TAX_DEADLINE_STATUSES)
+    return render_template("tax_deadline_form.html", item=item, tax_types=TAX_DEADLINE_TYPES, statuses=TAX_DEADLINE_STATUSES, activities=TAX_DEADLINE_ACTIVITIES)
 
 @app.route("/tax-calendar/<int:deadline_id>")
 def tax_calendar_detail(deadline_id):

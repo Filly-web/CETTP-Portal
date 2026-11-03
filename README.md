@@ -112,3 +112,6 @@ Set `EFD_PORTAL_DATA_DIR` to a persistent writable directory if EFD processing h
 
 ## Tax Compliance Calendar & Monitoring (V2.4)
 The portal now includes a Tax Compliance Calendar for manually maintained filing and payment obligations. Tax Compliance can create/edit obligations, assign owners, track due dates/statuses, attach evidence, view audit history, and export the register to CSV. Dates are deliberately not hard-coded: validate each deadline against current TRA requirements. Background email/push reminders and automatic recurring-period generation are not part of this release. The three new calendar tables are created by the existing `db.create_all()` startup call; back up the production database before deployment.
+
+## Tax Compliance Calendar V2.5
+See `CHANGELOG_V2_5_COMPLIANCE_CALENDAR_WORKSPACE_RECURRING_MANUAL.md` for the workspace integration, recurring deadline schedule and manual one-time deadline improvements.
