@@ -119,3 +119,8 @@ See `CHANGELOG_V2_5_COMPLIANCE_CALENDAR_WORKSPACE_RECURRING_MANUAL.md` for the w
 ## V2.6 calendar display update
 
 The Tax Compliance Calendar now opens on the current month and shows only obligations due in that month. Use Previous month / Next month to review other periods. Dashboard counters are scoped to the selected month. Monthly VAT obligations are separated into TRA VAT Return and ZRA VAT Return, both configured for the 20th. Existing recurring generic VAT rows are re-labelled as TRA VAT during schedule generation to avoid duplication. No schema migration is required.
+
+## EFD Batch Invoice Processing (V2.7)
+The EFD-to-Invoice dashboard now offers two separate choices: Single Invoice Processing (the existing workflow) and Batch Invoice Processing. Batch mode accepts multiple `.docx` invoices, asks for the matching TRA verification code and receipt time for each file, validates the complete mapping before processing, and downloads a ZIP containing processed files, any failed source files, and a CSV report. The current batch limit is 100 invoices and the application's existing 40 MB total request limit applies. Successful batch items are added to the existing processing history.
+
+The single-invoice route and form remain available at `/efd-invoice/` and `/efd-invoice/process` respectively. Batch mode is at `/efd-invoice/batch`.

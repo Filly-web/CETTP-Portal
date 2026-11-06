@@ -3,6 +3,8 @@ import re
 import io
 import sqlite3
 import tempfile
+import zipfile
+import csv
 from datetime import datetime, date
 from pathlib import Path
 
@@ -170,6 +172,19 @@ def add_efd_section(document, code, receipt_time, verification_url, qr_buffer):
     _fill_efd_table(table, code, receipt_time, verification_url, qr_buffer)
 
 
+def build_processed_invoice(input_path, output_path, verification_code, receipt_time):
+    """Apply the same EFD block used by single-invoice processing."""
+    try:
+        document = Document(str(input_path))
+    except Exception as exc:
+        raise ValueError("The uploaded file could not be opened as a valid .docx document.") from exc
+    verification_url = make_verification_url(verification_code, receipt_time)
+    qr_buffer = make_qr_image(verification_url)
+    add_efd_section(document, verification_code, receipt_time, verification_url, qr_buffer)
+    document.save(str(output_path))
+    return verification_url
+
+
 @efd_bp.route("/britam-logo.png")
 def britam_logo():
     if not LOGO_FILE.is_file():
@@ -226,17 +241,7 @@ def process_invoice():
             output_path = Path(temp_dir) / output_name
             uploaded.save(input_path)
 
-            try:
-                document = Document(str(input_path))
-            except Exception as exc:
-                raise ValueError("The uploaded file could not be opened as a valid .docx document.") from exc
-
-            qr_buffer = make_qr_image(verification_url)
-            add_efd_section(
-                document, verification_code, receipt_time,
-                verification_url, qr_buffer
-            )
-            document.save(str(output_path))
+            build_processed_invoice(input_path, output_path, verification_code, receipt_time)
 
             with get_db() as conn:
                 conn.execute("""
@@ -265,6 +270,115 @@ def process_invoice():
         current_app.logger.exception("Invoice processing failed")
         flash("Invoice processing failed. Check that the file is a valid .docx and try again.", "error")
         return redirect(url_for("efd_portal.dashboard"))
+
+
+@efd_bp.route("/batch", methods=["GET", "POST"])
+def batch_processing():
+    if request.method == "GET":
+        return render_template("efd_portal/batch.html")
+
+    uploads = [f for f in request.files.getlist("invoices") if f and f.filename]
+    if not uploads:
+        flash("Select at least one Word invoice to process.", "error")
+        return redirect(url_for("efd_portal.batch_processing"))
+    if len(uploads) > 100:
+        flash("A batch can contain a maximum of 100 invoices.", "error")
+        return redirect(url_for("efd_portal.batch_processing"))
+
+    # Validate every file and its matching EFD fields before processing any item.
+    prepared = []
+    seen_names = set()
+    seen_codes = set()
+    for index, uploaded in enumerate(uploads):
+        original_name = secure_filename(uploaded.filename) or f"invoice_{index + 1}.docx"
+        if not allowed_file(original_name):
+            flash(f"{uploaded.filename}: only .docx invoices are supported. No invoices were processed.", "error")
+            return redirect(url_for("efd_portal.batch_processing"))
+        if original_name.lower() in seen_names:
+            flash(f"Duplicate invoice filename detected: {original_name}. Rename the files and try again.", "error")
+            return redirect(url_for("efd_portal.batch_processing"))
+        seen_names.add(original_name.lower())
+        code = (request.form.get(f"verification_code_{index}") or "").strip()
+        raw_time = (request.form.get(f"verification_time_{index}") or "").strip()
+        if not code:
+            flash(f"Enter the TRA verification code for {original_name}. No invoices were processed.", "error")
+            return redirect(url_for("efd_portal.batch_processing"))
+        try:
+            receipt_time = normalize_time(raw_time)
+        except ValueError:
+            flash(f"Enter a valid receipt time for {original_name}. No invoices were processed.", "error")
+            return redirect(url_for("efd_portal.batch_processing"))
+        if code.casefold() in seen_codes:
+            flash(f"Duplicate EFD verification code detected for {original_name}. No invoices were processed.", "error")
+            return redirect(url_for("efd_portal.batch_processing"))
+        seen_codes.add(code.casefold())
+        prepared.append((uploaded, original_name, code, receipt_time))
+
+    batch_name = secure_filename((request.form.get("batch_name") or "EFD_batch").strip()) or "EFD_batch"
+    output_zip = io.BytesIO()
+    report_rows = []
+    successful_history = []
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_root = Path(temp_dir)
+        processed_dir = temp_root / "PROCESSED_INVOICES"
+        failed_dir = temp_root / "FAILED_INVOICES"
+        processed_dir.mkdir()
+        failed_dir.mkdir()
+
+        for index, (uploaded, original_name, code, receipt_time) in enumerate(prepared):
+            input_path = temp_root / f"input_{index}.docx"
+            output_name = f"{Path(original_name).stem}_processed.docx"
+            output_path = processed_dir / output_name
+            uploaded.save(input_path)
+            result = "Processed"
+            error_message = ""
+            try:
+                verification_url = build_processed_invoice(input_path, output_path, code, receipt_time)
+                successful_history.append((original_name, code, receipt_time))
+            except Exception as exc:
+                current_app.logger.exception("Batch invoice processing failed for %s", original_name)
+                result = "Failed"
+                error_message = str(exc) if isinstance(exc, ValueError) else "Invalid or unsupported Word document."
+                failed_path = failed_dir / original_name
+                input_path.replace(failed_path)
+                verification_url = ""
+            report_rows.append({
+                "original_filename": original_name,
+                "output_filename": output_name if result == "Processed" else "",
+                "verification_code": code,
+                "receipt_time": receipt_time,
+                "verification_url": verification_url,
+                "result": result,
+                "error": error_message,
+            })
+
+        # Remove empty failure folder to keep the ZIP tidy.
+        if not any(failed_dir.iterdir()):
+            failed_dir.rmdir()
+        report_path = temp_root / "BATCH_PROCESSING_REPORT.csv"
+        with report_path.open("w", newline="", encoding="utf-8-sig") as report_file:
+            writer = csv.DictWriter(report_file, fieldnames=list(report_rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(report_rows)
+
+        with zipfile.ZipFile(output_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for folder in (processed_dir, failed_dir):
+                if folder.exists():
+                    for file_path in folder.iterdir():
+                        archive.write(file_path, f"{folder.name}/{file_path.name}")
+            archive.write(report_path, report_path.name)
+
+    if successful_history:
+        with get_db() as conn:
+            for original_name, code, receipt_time in successful_history:
+                conn.execute("""
+                    INSERT INTO processing_history
+                    (created_at, process_date, filename, verification_code, receipt_time)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), date.today().isoformat(), original_name, code, receipt_time))
+
+    output_zip.seek(0)
+    return send_file(output_zip, as_attachment=True, download_name=f"{batch_name}_processed.zip", mimetype="application/zip")
 
 
 @efd_bp.route("/history", methods=["GET"])

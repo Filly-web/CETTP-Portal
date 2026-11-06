@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Batch Invoice Processing | Britam EFD Portal</title>
+<style>
+:root{--blue:#0874d1;--ink:#172b4d;--muted:#71839b;--line:#e6edf5;--bg:#f5f8fc}*{box-sizing:border-box}body{margin:0;background:var(--bg);font-family:Arial,sans-serif;color:var(--ink)}.wrap{max-width:1120px;margin:0 auto;padding:28px 20px}.top{display:flex;justify-content:space-between;align-items:center;gap:15px;margin-bottom:22px}.brand{font-weight:800;font-size:20px}.brand span{display:block;color:var(--muted);font-size:11px;font-weight:500;margin-top:4px}.btn{display:inline-block;border:0;border-radius:9px;background:var(--blue);color:#fff;text-decoration:none;padding:11px 16px;font-weight:700;font-size:13px;cursor:pointer}.btn.secondary{background:#edf5ff;color:#0756a5;border:1px solid #d7e8fb}.panel{background:#fff;border:1px solid var(--line);border-radius:14px;padding:22px;margin-bottom:18px;box-shadow:0 5px 18px #1d35570a}.intro h1{margin:0 0 8px;font-size:25px}.intro p{margin:0;color:var(--muted);font-size:14px;line-height:1.5}.field{margin:15px 0}.field label{display:block;font-size:13px;font-weight:700;margin-bottom:7px}.field input{width:100%;padding:11px;border:1px solid #cfd9e7;border-radius:8px;font:inherit}.hint{font-size:12px;color:var(--muted);margin-top:6px}.flash{padding:12px 14px;border-radius:9px;margin:0 0 15px;font-size:13px}.flash.error{background:#fff0f1;color:#9d2430;border:1px solid #ffcbd0}.flash.success{background:#e9fbf1;color:#126b42;border:1px solid #b9efd0}.table-wrap{overflow-x:auto}table{width:100%;border-collapse:collapse;min-width:720px;font-size:13px}th,td{text-align:left;padding:11px;border-bottom:1px solid var(--line);vertical-align:middle}th{font-size:11px;color:var(--muted);text-transform:uppercase;background:#f8fbff}td input{width:100%;padding:9px;border:1px solid #d4deea;border-radius:7px}.empty{padding:22px;text-align:center;color:var(--muted);border:1px dashed #cbd8e8;border-radius:10px}.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.pill{display:inline-block;background:#edf5ff;color:#0756a5;border-radius:20px;padding:5px 9px;font-size:11px;font-weight:700}.note{background:#f7faff;border:1px solid #e0ebf8;padding:13px;border-radius:9px;font-size:12px;color:#536d8c;line-height:1.5}.back{color:#0756a5;text-decoration:none;font-size:13px;font-weight:700}@media(max-width:650px){.wrap{padding:17px 12px}.top{align-items:flex-start;flex-direction:column}.panel{padding:16px}.intro h1{font-size:21px}}
+</style>
+</head>
+<body><div class="wrap">
+  <header class="top"><div class="brand">Britam EFD Portal<span>Tax Compliance Workspace</span></div><div class="actions"><a class="btn secondary" href="/efd-invoice/">← EFD Portal</a><a class="back" href="/">Back to CETTP</a></div></header>
+  {% with messages = get_flashed_messages(with_categories=true) %}{% for category, message in messages %}<div class="flash {{ category }}" role="alert">{{ message }}</div>{% endfor %}{% endwith %}
+  <section class="panel intro"><span class="pill">BATCH PROCESSING</span><h1>Process multiple invoices</h1><p>Upload Word invoices together, enter the matching TRA verification details for each file, then download all processed documents in one ZIP package. Single-invoice processing remains available separately.</p></section>
+  <form class="panel" action="/efd-invoice/batch" method="post" enctype="multipart/form-data" id="batch-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="field"><label for="batch_name">Batch name / reference</label><input id="batch_name" name="batch_name" maxlength="80" placeholder="e.g. MEDICAL_INVOICES_NOV_2026"></div>
+    <div class="field"><label for="invoices">Select Word invoices (.docx)</label><input id="invoices" name="invoices" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple required><div class="hint">Maximum 100 invoices per batch. Each file must be a valid .docx document. The current portal request limit is 40 MB in total.</div></div>
+    <div class="note">Each invoice must have its own verification code and receipt time. The system checks for missing details, repeated filenames and duplicate verification codes before processing. If the batch details are incomplete, no invoices will be processed.</div>
+    <div class="field"><label>Match EFD details to each invoice</label><div id="invoice-rows" class="empty">Select your Word invoices above. A matching row for each invoice will appear here.</div></div>
+    <div class="actions"><button class="btn" id="process-btn" type="submit" disabled>Process batch and download ZIP</button><a class="btn secondary" href="/efd-invoice/">Cancel</a><span class="hint" id="selection-summary"></span></div>
+  </form>
+</div>
+<script>
+const fileInput=document.getElementById('invoices'), rows=document.getElementById('invoice-rows'), submit=document.getElementById('process-btn'), summary=document.getElementById('selection-summary');
+function renderRows(){
+  const files=Array.from(fileInput.files||[]); rows.innerHTML='';
+  if(!files.length){rows.className='empty';rows.textContent='Select your Word invoices above. A matching row for each invoice will appear here.';submit.disabled=true;summary.textContent='';return;}
+  if(files.length>100){rows.className='empty';rows.textContent='Maximum 100 invoices per batch. Please select fewer files.';submit.disabled=true;summary.textContent='';return;}
+  rows.className='table-wrap'; const table=document.createElement('table');
+  table.innerHTML='<thead><tr><th>Invoice file</th><th>TRA verification code</th><th>Receipt time (HH:MM:SS)</th></tr></thead><tbody></tbody>';
+  const body=table.querySelector('tbody'); let total=0;
+  files.forEach((file,index)=>{total+=file.size;const tr=document.createElement('tr');const name=document.createElement('td');name.textContent=file.name;const codeCell=document.createElement('td');const code=document.createElement('input');code.type='text';code.name='verification_code_'+index;code.maxLength=100;code.placeholder='Enter EFD code';code.required=true;codeCell.appendChild(code);const timeCell=document.createElement('td');const time=document.createElement('input');time.type='text';time.name='verification_time_'+index;time.placeholder='14:05:09';time.pattern='(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]|(?:[01][0-9]|2[0-3])[0-5][0-9][0-5][0-9]';time.title='Enter HH:MM:SS or HHMMSS';time.required=true;timeCell.appendChild(time);tr.append(name,codeCell,timeCell);body.appendChild(tr);});
+  rows.appendChild(table);submit.disabled=false;summary.textContent=files.length+' invoice(s) selected · '+(total/1024/1024).toFixed(1)+' MB';
+}
+fileInput.addEventListener('change',renderRows);
+document.getElementById('batch-form').addEventListener('submit',function(){submit.disabled=true;submit.textContent='Processing batch… Please wait';});
+</script></body></html>
