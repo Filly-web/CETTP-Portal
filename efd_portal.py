@@ -5,6 +5,7 @@ import sqlite3
 import tempfile
 import zipfile
 import csv
+import shutil
 from datetime import datetime, date
 import uuid
 from pathlib import Path
