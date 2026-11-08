@@ -1578,6 +1578,20 @@ def tax_deadline_edit(deadline_id):
         return redirect(url_for("tax_calendar_detail", deadline_id=item.id))
     return render_template("tax_deadline_form.html", item=item, tax_types=TAX_DEADLINE_TYPES, statuses=TAX_DEADLINE_STATUSES, activities=TAX_DEADLINE_ACTIVITIES)
 
+@app.route("/tax-calendar/<int:deadline_id>/delete", methods=["POST"])
+def tax_deadline_delete(deadline_id):
+    if not _tax_calendar_required():
+        return redirect(url_for("home"))
+    item = TaxDeadline.query.get_or_404(deadline_id)
+    if item.created_by == RECURRING_DEADLINE_OWNER:
+        flash("System-generated recurring deadlines cannot be deleted from the calendar.", "warning")
+        return redirect(url_for("tax_calendar"))
+    obligation = item.obligation
+    db.session.delete(item)
+    db.session.commit()
+    flash(f'Manual deadline "{obligation}" deleted successfully.', "success")
+    return redirect(url_for("tax_calendar"))
+
 @app.route("/tax-calendar/<int:deadline_id>")
 def tax_calendar_detail(deadline_id):
     if not _tax_calendar_required(): return redirect(url_for("home"))
