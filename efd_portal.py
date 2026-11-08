@@ -3,13 +3,17 @@ import re
 import io
 import sqlite3
 import tempfile
+import zipfile
+import csv
+import shutil
 from datetime import datetime, date
+import uuid
 from pathlib import Path
 
 import qrcode
 from flask import (
     Blueprint, render_template, request, redirect, url_for, flash, current_app,
-    send_file, send_from_directory, abort
+    send_file, send_from_directory, abort, session
 )
 from docx import Document
 from docx.shared import Inches, Pt
@@ -44,6 +48,17 @@ def init_db():
                 filename TEXT NOT NULL,
                 verification_code TEXT NOT NULL,
                 receipt_time TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS batch_staging (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_id TEXT NOT NULL,
+                original_filename TEXT NOT NULL,
+                stored_path TEXT NOT NULL,
+                verification_code TEXT NOT NULL,
+                receipt_time TEXT NOT NULL,
+                created_at TEXT NOT NULL
             )
         """)
 
@@ -170,6 +185,19 @@ def add_efd_section(document, code, receipt_time, verification_url, qr_buffer):
     _fill_efd_table(table, code, receipt_time, verification_url, qr_buffer)
 
 
+def build_processed_invoice(input_path, output_path, verification_code, receipt_time):
+    """Apply the same EFD block used by single-invoice processing."""
+    try:
+        document = Document(str(input_path))
+    except Exception as exc:
+        raise ValueError("The uploaded file could not be opened as a valid .docx document.") from exc
+    verification_url = make_verification_url(verification_code, receipt_time)
+    qr_buffer = make_qr_image(verification_url)
+    add_efd_section(document, verification_code, receipt_time, verification_url, qr_buffer)
+    document.save(str(output_path))
+    return verification_url
+
+
 @efd_bp.route("/britam-logo.png")
 def britam_logo():
     if not LOGO_FILE.is_file():
@@ -226,17 +254,7 @@ def process_invoice():
             output_path = Path(temp_dir) / output_name
             uploaded.save(input_path)
 
-            try:
-                document = Document(str(input_path))
-            except Exception as exc:
-                raise ValueError("The uploaded file could not be opened as a valid .docx document.") from exc
-
-            qr_buffer = make_qr_image(verification_url)
-            add_efd_section(
-                document, verification_code, receipt_time,
-                verification_url, qr_buffer
-            )
-            document.save(str(output_path))
+            build_processed_invoice(input_path, output_path, verification_code, receipt_time)
 
             with get_db() as conn:
                 conn.execute("""
@@ -265,6 +283,181 @@ def process_invoice():
         current_app.logger.exception("Invoice processing failed")
         flash("Invoice processing failed. Check that the file is a valid .docx and try again.", "error")
         return redirect(url_for("efd_portal.dashboard"))
+
+
+@efd_bp.route("/batch", methods=["GET", "POST"])
+def batch_processing():
+    """Stage one invoice at a time with its EFD details, then download the batch."""
+    batch_id = session.get("efd_batch_id")
+    if not batch_id:
+        batch_id = uuid.uuid4().hex
+        session["efd_batch_id"] = batch_id
+
+    staging_root = DATA_DIR / "batch_staging" / batch_id
+    staging_root.mkdir(parents=True, exist_ok=True)
+
+    if request.method == "GET":
+        with get_db() as conn:
+            items = conn.execute(
+                "SELECT id, original_filename, verification_code, receipt_time, created_at "
+                "FROM batch_staging WHERE batch_id = ? ORDER BY id", (batch_id,)
+            ).fetchall()
+        return render_template("efd_portal/batch.html", items=items, batch_count=len(items))
+
+    action = (request.form.get("action") or "add").lower()
+    if action == "remove":
+        try:
+            item_id = int(request.form.get("item_id", ""))
+        except ValueError:
+            flash("Invalid invoice selection.", "error")
+            return redirect(url_for("efd_portal.batch_processing"))
+        with get_db() as conn:
+            item = conn.execute(
+                "SELECT stored_path FROM batch_staging WHERE id = ? AND batch_id = ?",
+                (item_id, batch_id)
+            ).fetchone()
+            if item:
+                Path(item["stored_path"]).unlink(missing_ok=True)
+                conn.execute("DELETE FROM batch_staging WHERE id = ? AND batch_id = ?", (item_id, batch_id))
+                flash("Invoice removed from the batch.", "success")
+        return redirect(url_for("efd_portal.batch_processing"))
+
+    if action == "clear":
+        with get_db() as conn:
+            items = conn.execute("SELECT stored_path FROM batch_staging WHERE batch_id = ?", (batch_id,)).fetchall()
+            for item in items:
+                Path(item["stored_path"]).unlink(missing_ok=True)
+            conn.execute("DELETE FROM batch_staging WHERE batch_id = ?", (batch_id,))
+        shutil.rmtree(staging_root, ignore_errors=True)
+        session.pop("efd_batch_id", None)
+        flash("The draft batch has been cleared.", "success")
+        return redirect(url_for("efd_portal.batch_processing"))
+
+    if action == "add":
+        uploaded = request.files.get("invoice")
+        code = (request.form.get("verification_code") or "").strip()
+        raw_time = (request.form.get("verification_time") or "").strip()
+        if not uploaded or not uploaded.filename:
+            flash("Select one Word invoice (.docx) to add.", "error")
+            return redirect(url_for("efd_portal.batch_processing"))
+        original_name = secure_filename(uploaded.filename) or "invoice.docx"
+        if not allowed_file(original_name):
+            flash("Only Microsoft Word .docx files are supported.", "error")
+            return redirect(url_for("efd_portal.batch_processing"))
+        if not code:
+            flash("Enter the TRA verification code for this invoice.", "error")
+            return redirect(url_for("efd_portal.batch_processing"))
+        try:
+            receipt_time = normalize_time(raw_time)
+        except ValueError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("efd_portal.batch_processing"))
+        with get_db() as conn:
+            existing = conn.execute(
+                "SELECT id FROM batch_staging WHERE batch_id = ? AND "
+                "(lower(original_filename) = lower(?) OR lower(verification_code) = lower(?)) LIMIT 1",
+                (batch_id, original_name, code)
+            ).fetchone()
+            count = conn.execute("SELECT COUNT(*) AS n FROM batch_staging WHERE batch_id = ?", (batch_id,)).fetchone()["n"]
+        if existing:
+            flash("This filename or EFD verification code is already in the current batch. Remove or rename the existing item before adding it again.", "error")
+            return redirect(url_for("efd_portal.batch_processing"))
+        if count >= 100:
+            flash("A batch can contain a maximum of 100 invoices.", "error")
+            return redirect(url_for("efd_portal.batch_processing"))
+        stored_path = staging_root / f"{uuid.uuid4().hex}.docx"
+        try:
+            uploaded.save(stored_path)
+            # Confirm the uploaded file is a readable Word document before staging it.
+            Document(str(stored_path))
+        except Exception:
+            stored_path.unlink(missing_ok=True)
+            flash("The uploaded file is not a valid .docx document.", "error")
+            return redirect(url_for("efd_portal.batch_processing"))
+        with get_db() as conn:
+            conn.execute("""
+                INSERT INTO batch_staging
+                (batch_id, original_filename, stored_path, verification_code, receipt_time, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (batch_id, original_name, str(stored_path), code, receipt_time, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        flash(f"{original_name} added with its EFD details. You can now add the next invoice.", "success")
+        return redirect(url_for("efd_portal.batch_processing"))
+
+    if action == "process":
+        with get_db() as conn:
+            items = conn.execute("SELECT * FROM batch_staging WHERE batch_id = ? ORDER BY id", (batch_id,)).fetchall()
+        if not items:
+            flash("Add at least one invoice before downloading the batch.", "error")
+            return redirect(url_for("efd_portal.batch_processing"))
+
+        output_zip = io.BytesIO()
+        report_rows = []
+        successful_history = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            processed_dir = temp_root / "PROCESSED_INVOICES"
+            failed_dir = temp_root / "FAILED_INVOICES"
+            processed_dir.mkdir()
+            failed_dir.mkdir()
+            for item in items:
+                original_name = item["original_filename"]
+                code = item["verification_code"]
+                receipt_time = item["receipt_time"]
+                output_name = f"{Path(original_name).stem}_processed.docx"
+                output_path = processed_dir / output_name
+                result, error_message, verification_url = "Processed", "", ""
+                try:
+                    source_path = Path(item["stored_path"])
+                    if not source_path.is_file():
+                        raise ValueError("Staged invoice file is missing. Please add the invoice again.")
+                    verification_url = build_processed_invoice(source_path, output_path, code, receipt_time)
+                    successful_history.append((original_name, code, receipt_time))
+                except Exception as exc:
+                    current_app.logger.exception("Batch invoice processing failed for %s", original_name)
+                    result = "Failed"
+                    error_message = str(exc) if isinstance(exc, ValueError) else "Invalid or unsupported Word document."
+                    failed_path = failed_dir / original_name
+                    source_path = Path(item["stored_path"])
+                    if source_path.is_file():
+                        shutil.copy2(source_path, failed_path)
+                report_rows.append({
+                    "original_filename": original_name, "output_filename": output_name if result == "Processed" else "",
+                    "verification_code": code, "receipt_time": receipt_time, "verification_url": verification_url,
+                    "result": result, "error": error_message
+                })
+            if not any(failed_dir.iterdir()):
+                failed_dir.rmdir()
+            report_path = temp_root / "BATCH_PROCESSING_REPORT.csv"
+            with report_path.open("w", newline="", encoding="utf-8-sig") as report_file:
+                writer = csv.DictWriter(report_file, fieldnames=list(report_rows[0].keys()))
+                writer.writeheader()
+                writer.writerows(report_rows)
+            with zipfile.ZipFile(output_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                for folder in (processed_dir, failed_dir):
+                    if folder.exists():
+                        for file_path in folder.iterdir():
+                            archive.write(file_path, f"{folder.name}/{file_path.name}")
+                archive.write(report_path, report_path.name)
+
+        if successful_history:
+            with get_db() as conn:
+                for original_name, code, receipt_time in successful_history:
+                    conn.execute("""
+                        INSERT INTO processing_history
+                        (created_at, process_date, filename, verification_code, receipt_time)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), date.today().isoformat(), original_name, code, receipt_time))
+        # The ZIP is now self-contained; remove this staged batch after successful packaging.
+        with get_db() as conn:
+            conn.execute("DELETE FROM batch_staging WHERE batch_id = ?", (batch_id,))
+        shutil.rmtree(staging_root, ignore_errors=True)
+        session.pop("efd_batch_id", None)
+        output_zip.seek(0)
+        batch_name = secure_filename((request.form.get("batch_name") or "EFD_batch").strip()) or "EFD_batch"
+        return send_file(output_zip, as_attachment=True, download_name=f"{batch_name}_processed.zip", mimetype="application/zip")
+
+    flash("Unknown batch action.", "error")
+    return redirect(url_for("efd_portal.batch_processing"))
 
 
 @efd_bp.route("/history", methods=["GET"])

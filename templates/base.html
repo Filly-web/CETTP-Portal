@@ -11,9 +11,9 @@
 <nav class="navbar navbar-expand-lg navbar-dark topbar">
  <div class="container-fluid px-3 px-xl-4">
   <a class="navbar-brand d-flex align-items-center gap-2" href="{{ url_for('home') }}">
-   <span class="brand-logo">B</span><span>Britam <small class="d-block brand-subtitle">CETTP v1.1</small></span>
+   <span class="brand-logo">B</span><span>Britam <small class="d-block brand-subtitle">CETTP + Fixed Assets</small></span>
   </a>
-  <div class="topbar-title d-none d-lg-block">Cancellation, Endorsement &amp; Tax Reconciliation Portal</div>
+  <div class="topbar-title d-none d-lg-block">CETTP &amp; Fixed Asset Governance Portal</div>
   <div class="ms-auto d-flex align-items-center gap-2">
    {% if current_role == 'tax' %}<span class="top-role"><span class="online-dot"></span> Tax Compliance</span><a class="btn btn-sm btn-light position-relative" href="{{ url_for('notifications') }}" aria-label="Notifications">🔔 Notifications{% if unread_notification_count %}<span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger">{{ unread_notification_count if unread_notification_count < 100 else '99+' }}</span>{% endif %}</a>{% elif current_role == 'initiator' %}<span class="top-role"><span class="online-dot"></span> Initiator</span>{% endif %}
    {% if current_role %}<a class="btn btn-sm btn-light" href="{{ url_for('logout') }}">Exit <span aria-hidden="true">↗</span></a>{% endif %}
@@ -26,6 +26,19 @@
   <div class="sidebar-section">WORKSPACE</div>
   <a class="side-link {{ 'active' if request.endpoint == 'dashboard' else '' }}" href="{{ url_for('dashboard') if current_role == 'tax' else url_for('cases') }}"><span class="side-icon">⌂</span> Dashboard</a>
   <a class="side-link {{ 'active' if request.endpoint == 'new_case' else '' }}" href="{{ url_for('new_case') }}"><span class="side-icon">＋</span> New Request</a>
+  {% if current_role == 'tax' %}<div class="sidebar-section mt-3">FINANCIAL MANAGEMENT</div>
+  <a class="side-link {{ 'active' if request.endpoint and request.endpoint.startswith('fixed_assets.') else '' }}" href="{{ url_for('fixed_assets.dashboard') }}"><span class="side-icon">▦</span> Fixed Asset Governance</a>
+  <a class="side-link" href="{{ url_for('fixed_assets.register') }}"><span class="side-icon">▤</span> Master FAR</a>
+  <a class="side-link" href="{{ url_for('fixed_assets.depreciation') }}"><span class="side-icon">∑</span> Depreciation</a>
+  <a class="side-link" href="{{ url_for('fixed_assets.cwip') }}"><span class="side-icon">▧</span> CWIP Projects</a>
+  <a class="side-link" href="{{ url_for('fixed_assets.trial_balance') }}"><span class="side-icon">⇧</span> Trial Balance &amp; GL</a>
+  <a class="side-link" href="{{ url_for('fixed_assets.reconciliation') }}"><span class="side-icon">↔</span> FAR Reconciliation</a>
+  <a class="side-link" href="{{ url_for('fixed_assets.verification') }}"><span class="side-icon">☑</span> Physical Verification</a>
+  <a class="side-link" href="{{ url_for('fixed_assets.insurance') }}"><span class="side-icon">◇</span> Insurance</a>
+  <a class="side-link" href="{{ url_for('fixed_assets.tax_schedules') }}"><span class="side-icon">▥</span> Tax &amp; Deferred Tax</a>
+  <a class="side-link" href="{{ url_for('fixed_assets.periods') }}"><span class="side-icon">▣</span> Period Controls</a>
+  <a class="side-link" href="{{ url_for('fixed_assets.audit_pack') }}"><span class="side-icon">⇩</span> Audit Pack Export</a>
+  <a class="side-link" href="{{ url_for('fixed_assets.audit_log') }}"><span class="side-icon">◷</span> Asset Audit Log</a>{% endif %}
   <a class="side-link {{ 'active' if request.endpoint in ['cases','case_detail'] else '' }}" href="{{ url_for('cases') }}"><span class="side-icon">▤</span> {{ 'My Requests' if current_role == 'initiator' else 'Case Register' }}</a>
   {% if current_role == 'tax' %}
   <a class="side-link {{ 'active' if request.endpoint == 'notifications' else '' }}" href="{{ url_for('notifications') }}"><span class="side-icon">♧</span> Notifications {% if unread_notification_count %}<span class="badge bg-danger ms-auto">{{ unread_notification_count }}</span>{% endif %}</a>
@@ -42,7 +55,7 @@
   <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">{{ message }}<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
   {% endfor %}{% endif %}{% endwith %}
   {% block content %}{% endblock %}
-  <footer class="app-footer"><span><strong>CETTP v1.1</strong> <span class="footer-divider">|</span> Cancellation, Endorsement &amp; Tax Reconciliation Portal</span><span>Internal use only · Britam</span></footer>
+  <footer class="app-footer"><span><strong>CETTP V2.9</strong> <span class="footer-divider">|</span> CETTP &amp; Fixed Asset Governance Portal</span><span>Internal use only · Britam</span></footer>
  </main>
 </div>
 <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>

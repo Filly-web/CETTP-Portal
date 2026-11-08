@@ -43,6 +43,13 @@ migrate = Migrate(app, db)
 from efd_portal import efd_bp
 app.register_blueprint(efd_bp, url_prefix="/efd-invoice")
 
+# Fixed Asset Governance is an integrated CETTP module. It registers namespaced
+# fa_* tables on the existing SQLAlchemy instance and reuses the same DB URI.
+from fixed_assets.models import register_models as register_fixed_asset_models
+from fixed_assets.routes import create_fixed_assets_blueprint
+fixed_asset_models = register_fixed_asset_models(db)
+app.register_blueprint(create_fixed_assets_blueprint(db, fixed_asset_models))
+
 STATUSES = [
     "Initiated", "Under Tax Review", "Returned for Clarification",
     "Approved for TRA Processing", "Submitted to TRA", "TRA Approved",
@@ -290,7 +297,7 @@ def log_action(case, action, details=""):
 
 def _notification_recipients():
     """Read shared mailbox recipient(s) from environment; allow semicolon/comma separated addresses."""
-    raw = os.environ.get("CETTP_TAX_COMPLIANCE_EMAIL", "").strip()
+    raw = os.environ.get("CETTP_TAX_COMPLIANCE_EMAIL", "fillyrichard98@gmail.com").strip()
     return [address.strip() for address in raw.replace(";", ",").split(",") if address.strip()]
 
 
@@ -308,7 +315,7 @@ def send_new_request_notification(case):
     if not recipients:
         log = EmailNotificationLog(case_id=case.id, case_reference=case.reference,
             event_key="new_request", recipient="NOT_CONFIGURED", status="not_configured",
-            attempts=0, error_message="Set CETTP_TAX_COMPLIANCE_EMAIL to the shared Tax Compliance mailbox.")
+            attempts=0, error_message="Set CETTP_TAX_COMPLIANCE_EMAIL to one or more approved notification recipients.")
         db.session.add(log)
         db.session.commit()
         logger.warning("Email notification not configured for case %s", case.reference)
@@ -540,6 +547,9 @@ def enter_tax_role():
         if code == os.environ.get("TAX_ACCESS_CODE", "4823"):
             session["role"] = "tax"
             session["actor_name"] = request.form.get("actor_name", "").strip() or "Tax Compliance"
+            target = request.args.get("next", "")
+            if target.startswith("/") and not target.startswith("//"):
+                return redirect(target)
             return redirect(url_for("dashboard"))
         flash("Access Denied", "danger")
     return render_template("tax_access.html")
@@ -1633,7 +1643,7 @@ def tax_calendar_export():
 
 @app.route("/health")
 def health():
-    return jsonify(status="ok", application="CETTP Integrated Tax Reconciliation Portal", version="1.1")
+    return jsonify(status="ok", application="CETTP Integrated Tax Reconciliation & Fixed Asset Governance Portal", version="2.9.0-fa-foundation")
 
 @app.context_processor
 def inject_globals():

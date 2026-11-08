@@ -119,3 +119,35 @@ See `CHANGELOG_V2_5_COMPLIANCE_CALENDAR_WORKSPACE_RECURRING_MANUAL.md` for the w
 ## V2.6 calendar display update
 
 The Tax Compliance Calendar now opens on the current month and shows only obligations due in that month. Use Previous month / Next month to review other periods. Dashboard counters are scoped to the selected month. Monthly VAT obligations are separated into TRA VAT Return and ZRA VAT Return, both configured for the 20th. Existing recurring generic VAT rows are re-labelled as TRA VAT during schedule generation to avoid duplication. No schema migration is required.
+
+---
+
+# CETTP V2.9 – Integrated Fixed Asset Governance
+
+The Fixed Asset Governance module is now part of the existing CETTP Flask application at `/fixed-assets`. It shares CETTP's existing SQLAlchemy instance, PostgreSQL `DATABASE_URL`, CSRF protection and Tax Compliance session. New fixed asset tables are prefixed `fa_`; existing CETTP tables and workflows are not modified.
+
+## Fixed Asset capabilities in this integration
+
+- Executive fixed asset dashboard and searchable, paginated Master FAR.
+- Individual asset registration and automatic asset numbering.
+- Excel/CSV staged FAR imports with automatic and manual column mapping, preview, duplicate detection and financial validation.
+- Monthly straight-line and reducing-balance depreciation runs, with run idempotency and asset-level depreciation history.
+- Trial Balance imports, configurable GL mappings, category cost/accumulated depreciation/NBV reconciliation and investigation notes.
+- First-run FAR period snapshots and retained reconciliation history.
+- Asset transfers, disposals and gain/loss calculations.
+- CWIP project expenditure and capitalization.
+- Physical verification records and QR code images.
+- Insurance policies and renewal/expiry status.
+- Tax WDV and indicative deferred-tax schedules.
+- Financial period locking/reopening and audit logs.
+- Master FAR exports in Excel, CSV and PDF, plus a 12-sheet audit pack.
+
+## Deployment
+
+Use this folder as the repository root and retain the existing Render service and PostgreSQL `DATABASE_URL`. The app's startup `db.create_all()` call creates the new `fa_*` tables; it does not alter existing CETTP tables. Back up the production database before deploying. Set `FA_FY_START_MONTH` to the organization's financial-year starting month (1–12; default 1). Set strong production `SECRET_KEY` and `TAX_ACCESS_CODE` values using Render environment variables.
+
+The Fixed Asset module currently reuses CETTP's Tax Compliance role gate. The current CETTP access-code model is a pilot access mechanism, not a complete enterprise named-user RBAC solution. Review `CHANGELOG_V2_9_FIXED_ASSET_GOVERNANCE.md`, `docs_FIXED_ASSET_ARCHITECTURE.md` and `docs_FIXED_ASSET_ACCOUNTING_CONTROLS.md` before production financial posting.
+
+## Known next-stage work
+
+A full maker-checker approval queue, named-user role administration, accounting journal integration, complete document upload/retention UI, units-of-production usage capture, impairment, component accounting, automated IFRS rollforwards and production background jobs remain required before the platform is treated as the final controlled financial system. Tax WDV remains an approved user input; deferred-tax recognition requires Finance review.
