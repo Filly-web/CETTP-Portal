@@ -1,16 +1,6 @@
-# V1.6 — Initiator workspace and tracking
+# CETTP v1.8 – Initiator submission fix
 
-- Adds a dedicated Initiator dashboard with personal request counters and recent cases.
-- Adds a private My Updates inbox with read/unread status and direct links to the related case.
-- Creates Initiator notifications when Tax Compliance changes workflow status or adds review notes, including returned-for-clarification and final outcomes.
-- Scopes Initiator case listing and exports to records whose Initiator identity matches the email used for the current session.
-- Enforces case-level ownership checks for case detail, attachment upload and attachment download routes.
-- Adds date-range and overdue filters to the case list; Initiators can filter returned and overdue cases using the existing status/filter controls.
-- Tax Compliance retains the broader case register and approval/status controls.
-
-## Notes
-
-- Initiator access remains email-only for the pilot and does not verify email ownership. Do not treat the entered email as authenticated identity in production.
-- The existing database initialization (`db.create_all()`) creates the new `initiator_notification` table for new deployments. For production databases, apply an approved migration/initialization process and back up first.
-- Draft saving and editing are not yet implemented as a persisted workflow; the dashboard displays a Drafts metric for compatibility but this feature should be completed before presenting drafts as available to users.
-- No WHT reconciliation module was added as part of this change.
+- Fixed Initiator case submission validation. The Initiator name field is hidden for Initiators, but was still marked required by WTForms; this caused `validate_on_submit()` to reject the form before saving the case or creating a Tax Compliance notification.
+- The application now populates the required Initiator name field from the email-only login session before validation.
+- Tax Compliance submissions continue to use the name entered in the form.
+- No database schema, database URL, hosting configuration, or WHT functionality was changed.

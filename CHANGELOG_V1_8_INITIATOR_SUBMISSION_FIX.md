@@ -1,19 +1,12 @@
-# CETTP V1.1 – Case Supporting Documents
+# CETTP V1.1 — New Request Email Notifications
 
-## Added
-- Case-level supporting-document register for cancellation and endorsement requests.
-- Upload categories: Original invoice; TRA cancellation note/approval; Credit note; Corrected/replacement invoice; Other supporting document.
-- Upload during initial request submission and later from the case details page.
-- Multiple files per category; PDF, PNG, JPG/JPEG, XLS/XLSX, DOC/DOCX and CSV accepted.
-- 12 MB per-file limit and 40 MB total request limit.
-- Documents stored as binary data in the configured SQL database, avoiding dependence on Render's ephemeral local filesystem.
-- Authenticated-by-role download routes and Tax Compliance-only removal from the active case list.
-- Upload metadata includes original filename, category, uploader, UTC timestamp, file size and MIME type.
-- Upload/removal actions are written to the case audit history. Removal is a soft-delete from the active list; the binary and audit metadata are retained.
-- Existing requests can receive supporting documents after submission. TRA notes and credit notes are not required at initiation because they may only be available later.
+- Added an `EmailNotificationLog` database table for sent, failed and not-configured notification attempts.
+- New Initiator-submitted cancellation and endorsement cases trigger one email attempt to the shared Tax Compliance mailbox after the case is committed.
+- Added duplicate-send prevention with a unique case/event key.
+- Added Microsoft 365 SMTP submission via STARTTLS, configured only through environment variables.
+- Email failures do not undo the request; status and bounded error details are recorded for follow-up.
+- Added configurable public CETTP URL for the case link in the email.
+- Premium Register batch imports do not trigger this new-Initiator-request notification.
+- No WHT reconciliation functionality was added or changed as part of this enhancement.
 
-## Deployment note
-The new `case_attachment` table is created by the application's existing `db.create_all()` startup initialization. For production environments using managed migrations, create and apply a migration for the new table before deployment. Back up the database regularly because file contents are stored in it.
-
-## Security note
-The feature uses the portal's existing role/access model. Before production use with sensitive documents, configure a strong `SECRET_KEY` and `TAX_ACCESS_CODE`, restrict access to authorised users, and confirm the organisation's document retention policy. Extension filtering is applied; this is not a malware scanner.
+Microsoft 365 SMTP AUTH availability and credential method must be confirmed by Britam IT. If SMTP AUTH is not allowed, integrate the approved Microsoft Graph method instead.

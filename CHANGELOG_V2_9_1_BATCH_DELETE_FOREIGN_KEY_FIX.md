@@ -1,7 +1,9 @@
-# V1.9 – Initiator submission transaction fix
+# CETTP V2.0 – Case Editing and Returned Request Resubmission
 
-- Corrected Initiator-side WTForms validation: the Initiator name is derived from the email-only session and is no longer incorrectly rejected when the hidden name field is absent from the submitted form.
-- Kept the Initiator name requirement for Tax Compliance submissions.
-- Made case creation, attachment persistence, audit logging and the Tax Compliance in-app notification part of one database transaction. If any part fails, the transaction rolls back and a server-side exception is logged.
-- Kept the existing email-only Initiator entry, mandatory cancelled invoice/EFD attachment, existing workflow, database URL and environment-variable configuration.
-
+- Tax Compliance can edit submitted case details, including policy number, customer/insured name and TIN, request type, effective date, reason, product, branch, underwriter, invoice number and financial amounts.
+- Initiators can edit only cases in `Returned for Clarification` and resubmit them to `Under Tax Review`.
+- Initiator ownership checks remain enforced; an initiator cannot edit another initiator's case.
+- Case changes are recorded in the existing audit history.
+- Resubmission creates an in-app notification for Tax Compliance. Tax Compliance edits trigger an initiator notification.
+- Existing attachments remain attached. Editing does not require uploading the cancelled invoice/EFD again, but additional supporting documents can be added.
+- No database schema change is required; the existing case fields and notification tables are reused.

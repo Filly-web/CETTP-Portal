@@ -1,16 +1,13 @@
-# V1.1 Monthly Premium Register Tracking Enhancement
+# CETTP enhancement: overdue monitoring, reconciliation review and compact UI
 
-- Added a required reconciliation-month selector to Premium Register uploads.
-- Added a persistent monthly upload history with source file, transaction counts, negative-premium count, exact-match count, different-amount count, pure-cancellation count, uploader and upload timestamp.
-- Each upload receives its own batch identifier. Uploading a month again creates a separate retained batch; it does not overwrite earlier tracking records.
-- Added month filtering and per-month Excel exports, with an all-month export option.
-- Excel exports include the reporting month, cancellation/endorsement reason, TRA status/reference, and CETTP case reference.
-- Implemented the history in a new database table so the existing V1.1 `CancellationTrack` and `Case` tables are not changed. `db.create_all()` creates the new table at application startup.
-- No V1.2 persistence hardening changes were intentionally added.
+- Added configurable overdue monitoring to the Tax Compliance dashboard. Open cases at or beyond `CETTP_OVERDUE_DAYS` are listed oldest-first; default threshold is 5 days. Closed cases are excluded.
+- Added Premium Register reconciliation summary cards for exact amount matches, different amount review cases, pure cancellations, and rows not yet linked to a CETTP case.
+- Clarified that policy/amount matching is a review suggestion and should be checked against dates, document numbers and existing cases before import.
+- Reduced general typography and button sizing for a more compact, professional interface while retaining responsive layouts.
+- No WHT reconciliation module added.
 
-## Duplicate cancellation / endorsement controls
-- Added duplicate-action detection across initiator-created CETTP cases and Premium Register tracking records.
-- Exact duplicate actions are identified using normalized policy number plus action type, effective/transaction date, document/invoice number, and absolute adjustment amount.
-- Initiator submissions are stopped with a clear alert when an exact duplicate already exists; related actions on the same policy are flagged for review without blocking legitimate separate endorsements.
-- Premium Register uploads skip exact duplicates already in CETTP, in prior register uploads, or repeated within the same upload, and display a summary alert.
-- Import-to-CETTP avoids creating a second case for an action already initiated and links the tracker row to the existing CETTP case when available.
+## Configuration
+Optional Render environment variable: `CETTP_OVERDUE_DAYS=5`. Change the value to the agreed internal follow-up threshold.
+
+## Deployment note
+Deploy to the existing service only after backing up the production database and merging the package changes into the currently connected source. Review any existing custom CSS/template changes before replacing files.

@@ -1,8 +1,3 @@
-# V2.9.1 — Cancellation Tracker batch deletion fix
+# Superseded batch deletion change
 
-- Changed batch deletion order to remove the batch's `CancellationTrack` rows before deleting any Premium Register-imported `Case` records.
-- Preserves Initiator-created cases, including cases linked to a tracker row.
-- Wrapped deletion in a transaction with rollback and server-side exception logging.
-- No schema migration or database URL change.
-
-Validation: Python syntax compilation and ZIP integrity check. A live Render/PostgreSQL test was not performed.
+This earlier V2.9.1 change is superseded by V2.9.2. The current implementation deletes only the selected Premium Register upload and its tracking rows, and retains linked CETTP cases to protect shared references and audit history. See `CHANGELOG_V2_9_2_SAFE_BATCH_DELETE.md`.

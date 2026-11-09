@@ -1,4 +1,13 @@
-{% extends 'base.html' %}{% block title %}Sign in | Fixed Asset Governance{% endblock %}{% block content %}
-<div class="login-card"><div class="brand-mark large">FA</div><div class="eyebrow mt-3">BRITAM FINANCIAL CONTROL</div><h1 class="h3 fw-bold">Fixed Asset Governance Portal</h1><p class="text-muted">Sign in to manage the asset register, depreciation, reconciliation and audit reporting.</p>
-<form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><div class="mb-3"><label class="form-label">Administrator email</label><input class="form-control form-control-lg" type="email" name="email" autocomplete="username" required></div><div class="mb-3"><label class="form-label">Password</label><input class="form-control form-control-lg" type="password" name="password" autocomplete="current-password" required></div><button class="btn btn-primary btn-lg w-100">Sign in</button></form><div class="small text-muted mt-3">Access is controlled by the portal administrator.</div></div>
-{% endblock %}
+# V2.4 – Tax Compliance Calendar & Monitoring
+
+- Added a Tax Compliance Calendar service option and Tax Compliance sidebar navigation.
+- Added manual creation and editing of separate filing/payment obligations, due dates, periods, assigned officers, status, completion dates, payment amounts and control numbers.
+- Added dashboard counts for due in seven days, due today, overdue, payment pending and completed.
+- Added document evidence uploads stored in the application database, CSV export, and per-obligation audit history.
+- Added overdue status calculation without overwriting the saved workflow status.
+
+## Deployment and database
+The app's existing startup `db.create_all()` will create the three new calendar tables on startup without dropping or replacing existing tables. Existing `DATABASE_URL`, Render service, and EFD portal configuration are unchanged. Back up the production database before deployment.
+
+## Important
+This release does not hard-code statutory due dates or automatically create future periods. Tax Compliance must enter and validate each deadline against current TRA/statutory requirements. Filing and payment dates should be separate obligations where they differ. Reminders are currently visible through the dashboard counters and overdue labels; background email/push reminders are not included in this first release.
