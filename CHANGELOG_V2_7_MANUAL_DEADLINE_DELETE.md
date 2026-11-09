@@ -1,7 +1,7 @@
-# V2.7 – Manual Tax Deadline Deletion
+# V1.7 – Initiator email username login
 
-- Added a Delete action beside Edit for manually created tax compliance deadlines.
-- Deletion requires a confirmation prompt and a CSRF-protected POST request.
-- System-generated recurring statutory deadlines are not offered for deletion and are protected by the server route.
-- Deleting a manual deadline also removes its linked evidence and detail audit entries through the existing ORM cascade relationships.
-- No database schema changes or migration are required.
+- Initiators enter their work email as the username only; no password, OTP, or verification code is requested.
+- CSRF protection is exempted only on the Initiator email-entry endpoint to avoid the reported missing-token error.
+- Tax Compliance login remains protected by CSRF.
+- This pilot mode does not verify ownership of the email address; anyone who knows an email can enter it.
+- No database configuration or existing case data changes are included.

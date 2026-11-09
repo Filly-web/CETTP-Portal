@@ -1,12 +1,8 @@
-# EFD template fix — deployment notes
+# V2.8 – Email notification recipient configuration
 
-The EFD portal's templates are explicitly namespaced to prevent collisions with CETTP templates of the same name.
-
-- Dashboard: `templates/efd_portal/index.html`
-- Processing history: `templates/efd_portal/history.html`
-
-Render settings (assuming `app.py` defines `app` at repository root):
-- Build command: `pip install -r requirements.txt`
-- Start command: `gunicorn app:app`
-
-Do not change the existing database URL or create a new service for this fix. Back up existing databases before replacing files. After deployment, test Initiator login, Tax Compliance login, EFD invoice generation, EFD history, and Back to CETTP navigation.
+- Configured `fillyrichard98@gmail.com` as the default Tax Compliance notification recipient.
+- Kept Gmail as a recipient only; the existing Microsoft 365 SMTP account remains the sender.
+- Retained comma/semicolon-separated multiple recipient support through `CETTP_TAX_COMPLIANCE_EMAIL`.
+- No Gmail password, SMTP secret, database migration, or database URL change is introduced.
+- Existing notification behavior remains: an email is attempted after a new Initiator cancellation/endorsement request is successfully saved.
+- Microsoft 365 sender credentials must be supplied securely in the existing Render environment by an authorized administrator.
