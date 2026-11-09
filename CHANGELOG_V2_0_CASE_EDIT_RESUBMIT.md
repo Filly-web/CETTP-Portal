@@ -1,9 +1,12 @@
-# CETTP V2.0 – Case Editing and Returned Request Resubmission
+# CETTP V1.1 — New Request Email Notifications
 
-- Tax Compliance can edit submitted case details, including policy number, customer/insured name and TIN, request type, effective date, reason, product, branch, underwriter, invoice number and financial amounts.
-- Initiators can edit only cases in `Returned for Clarification` and resubmit them to `Under Tax Review`.
-- Initiator ownership checks remain enforced; an initiator cannot edit another initiator's case.
-- Case changes are recorded in the existing audit history.
-- Resubmission creates an in-app notification for Tax Compliance. Tax Compliance edits trigger an initiator notification.
-- Existing attachments remain attached. Editing does not require uploading the cancelled invoice/EFD again, but additional supporting documents can be added.
-- No database schema change is required; the existing case fields and notification tables are reused.
+- Added an `EmailNotificationLog` database table for sent, failed and not-configured notification attempts.
+- New Initiator-submitted cancellation and endorsement cases trigger one email attempt to the shared Tax Compliance mailbox after the case is committed.
+- Added duplicate-send prevention with a unique case/event key.
+- Added Microsoft 365 SMTP submission via STARTTLS, configured only through environment variables.
+- Email failures do not undo the request; status and bounded error details are recorded for follow-up.
+- Added configurable public CETTP URL for the case link in the email.
+- Premium Register batch imports do not trigger this new-Initiator-request notification.
+- No WHT reconciliation functionality was added or changed as part of this enhancement.
+
+Microsoft 365 SMTP AUTH availability and credential method must be confirmed by Britam IT. If SMTP AUTH is not allowed, integrate the approved Microsoft Graph method instead.

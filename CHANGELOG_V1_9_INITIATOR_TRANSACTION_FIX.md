@@ -1,7 +1,8 @@
-# V1.9 – Initiator submission transaction fix
+# CETTP V1.1 — Case and Batch Administration
 
-- Corrected Initiator-side WTForms validation: the Initiator name is derived from the email-only session and is no longer incorrectly rejected when the hidden name field is absent from the submitted form.
-- Kept the Initiator name requirement for Tax Compliance submissions.
-- Made case creation, attachment persistence, audit logging and the Tax Compliance in-app notification part of one database transaction. If any part fails, the transaction rolls back and a server-side exception is logged.
-- Kept the existing email-only Initiator entry, mandatory cancelled invoice/EFD attachment, existing workflow, database URL and environment-variable configuration.
-
+- Added Tax Compliance-only deletion for individual Case Register records.
+- Deleting a case also removes linked Premium Register tracker rows to prevent stale tracking and re-import confusion.
+- Added individual Premium Register tracker-row deletion.
+- Added monthly upload batch deletion from upload history. It removes the selected batch's tracker rows and register-imported cases, while preserving cases originally initiated by users.
+- Added Case Register Excel export, respecting current search, workflow-status, and request-type filters.
+- Added confirmation prompts and CSRF-protected POST forms for destructive actions.

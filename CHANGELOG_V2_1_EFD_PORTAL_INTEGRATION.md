@@ -1,8 +1,9 @@
-# CETTP v2.1 — EFD-to-Invoice Portal Integration
+# V1.1 enhancement — In-app Tax Compliance notifications
 
-- Added EFD-to-Invoice as a third option on the pre-login service selection page.
-- Mounted the existing EFD invoice processing utility under `/efd-invoice/` using a Flask Blueprint to avoid route collisions with CETTP.
-- Preserved Initiator and Tax Compliance workflows and case-edit/resubmission features.
-- Added `python-docx` and `qrcode[pil]` dependencies.
-- EFD processing history remains in its own SQLite database, configurable through `EFD_PORTAL_DATA_DIR`; configure persistent storage for durable history on Render.
-- EFD utility currently has no role login; access should be restricted to approved internal users.
+- Added in-app alerts when a new cancellation or endorsement request is submitted.
+- Added a Tax Compliance notification center with unread/read labels and timestamps.
+- Added per-actor read receipts, mark-one-as-read/open-case, and mark-all-as-read actions.
+- Added unread count badge to the navigation bar and sidebar.
+- In-app notifications work without an email address or Microsoft 365 configuration.
+- Email remains optional and separate; request submission is retained if email delivery is not configured or fails.
+- Added `InAppNotification` and `InAppNotificationRead` database tables through the existing `db.create_all()` startup setup.

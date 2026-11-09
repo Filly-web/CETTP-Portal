@@ -1,13 +1,13 @@
-# V2.4 – Tax Compliance Calendar & Monitoring
+# CETTP enhancement: overdue monitoring, reconciliation review and compact UI
 
-- Added a Tax Compliance Calendar service option and Tax Compliance sidebar navigation.
-- Added manual creation and editing of separate filing/payment obligations, due dates, periods, assigned officers, status, completion dates, payment amounts and control numbers.
-- Added dashboard counts for due in seven days, due today, overdue, payment pending and completed.
-- Added document evidence uploads stored in the application database, CSV export, and per-obligation audit history.
-- Added overdue status calculation without overwriting the saved workflow status.
+- Added configurable overdue monitoring to the Tax Compliance dashboard. Open cases at or beyond `CETTP_OVERDUE_DAYS` are listed oldest-first; default threshold is 5 days. Closed cases are excluded.
+- Added Premium Register reconciliation summary cards for exact amount matches, different amount review cases, pure cancellations, and rows not yet linked to a CETTP case.
+- Clarified that policy/amount matching is a review suggestion and should be checked against dates, document numbers and existing cases before import.
+- Reduced general typography and button sizing for a more compact, professional interface while retaining responsive layouts.
+- No WHT reconciliation module added.
 
-## Deployment and database
-The app's existing startup `db.create_all()` will create the three new calendar tables on startup without dropping or replacing existing tables. Existing `DATABASE_URL`, Render service, and EFD portal configuration are unchanged. Back up the production database before deployment.
+## Configuration
+Optional Render environment variable: `CETTP_OVERDUE_DAYS=5`. Change the value to the agreed internal follow-up threshold.
 
-## Important
-This release does not hard-code statutory due dates or automatically create future periods. Tax Compliance must enter and validate each deadline against current TRA/statutory requirements. Filing and payment dates should be separate obligations where they differ. Reminders are currently visible through the dashboard counters and overdue labels; background email/push reminders are not included in this first release.
+## Deployment note
+Deploy to the existing service only after backing up the production database and merging the package changes into the currently connected source. Review any existing custom CSS/template changes before replacing files.

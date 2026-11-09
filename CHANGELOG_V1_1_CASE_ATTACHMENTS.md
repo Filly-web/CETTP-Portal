@@ -1,19 +1,68 @@
-# CETTP V1.1 – Case Supporting Documents
-
-## Added
-- Case-level supporting-document register for cancellation and endorsement requests.
-- Upload categories: Original invoice; TRA cancellation note/approval; Credit note; Corrected/replacement invoice; Other supporting document.
-- Upload during initial request submission and later from the case details page.
-- Multiple files per category; PDF, PNG, JPG/JPEG, XLS/XLSX, DOC/DOCX and CSV accepted.
-- 12 MB per-file limit and 40 MB total request limit.
-- Documents stored as binary data in the configured SQL database, avoiding dependence on Render's ephemeral local filesystem.
-- Authenticated-by-role download routes and Tax Compliance-only removal from the active case list.
-- Upload metadata includes original filename, category, uploader, UTC timestamp, file size and MIME type.
-- Upload/removal actions are written to the case audit history. Removal is a soft-delete from the active list; the binary and audit metadata are retained.
-- Existing requests can receive supporting documents after submission. TRA notes and credit notes are not required at initiation because they may only be available later.
-
-## Deployment note
-The new `case_attachment` table is created by the application's existing `db.create_all()` startup initialization. For production environments using managed migrations, create and apply a migration for the new table before deployment. Back up the database regularly because file contents are stored in it.
-
-## Security note
-The feature uses the portal's existing role/access model. Before production use with sensitive documents, configure a strong `SECRET_KEY` and `TAX_ACCESS_CODE`, restrict access to authorised users, and confirm the organisation's document retention policy. Extension filtering is applied; this is not a malware scanner.
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}CETTP v1.0{% endblock %}</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdn.datatables.net/2.1.8/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+<link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
+</head>
+<body>
+<nav class="navbar navbar-expand-lg navbar-dark topbar">
+ <div class="container-fluid px-3 px-xl-4">
+  <a class="navbar-brand d-flex align-items-center gap-2" href="{{ url_for('home') }}">
+   <span class="brand-logo">B</span><span>Britam <small class="d-block brand-subtitle">CETTP + Fixed Assets</small></span>
+  </a>
+  <div class="topbar-title d-none d-lg-block">CETTP &amp; Fixed Asset Governance Portal</div>
+  <div class="ms-auto d-flex align-items-center gap-2">
+   {% if current_role == 'tax' %}<span class="top-role"><span class="online-dot"></span> Tax Compliance</span><a class="btn btn-sm btn-light position-relative" href="{{ url_for('notifications') }}" aria-label="Notifications">🔔 Notifications{% if unread_notification_count %}<span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger">{{ unread_notification_count if unread_notification_count < 100 else '99+' }}</span>{% endif %}</a>{% elif current_role == 'initiator' %}<span class="top-role"><span class="online-dot"></span> Initiator</span>{% endif %}
+   {% if current_role %}<a class="btn btn-sm btn-light" href="{{ url_for('logout') }}">Exit <span aria-hidden="true">↗</span></a>{% endif %}
+  </div>
+ </div>
+</nav>
+<div class="app-shell">
+ {% if current_role %}
+ <aside class="sidebar">
+  <div class="sidebar-section">WORKSPACE</div>
+  <a class="side-link {{ 'active' if request.endpoint == 'dashboard' else '' }}" href="{{ url_for('dashboard') if current_role == 'tax' else url_for('cases') }}"><span class="side-icon">⌂</span> Dashboard</a>
+  <a class="side-link {{ 'active' if request.endpoint == 'new_case' else '' }}" href="{{ url_for('new_case') }}"><span class="side-icon">＋</span> New Request</a>
+  {% if current_role == 'tax' %}<div class="sidebar-section mt-3">FINANCIAL MANAGEMENT</div>
+  <a class="side-link {{ 'active' if request.endpoint and request.endpoint.startswith('fixed_assets.') else '' }}" href="{{ url_for('fixed_assets.dashboard') }}"><span class="side-icon">▦</span> Fixed Asset Governance</a>
+  <a class="side-link" href="{{ url_for('fixed_assets.register') }}"><span class="side-icon">▤</span> Master FAR</a>
+  <a class="side-link" href="{{ url_for('fixed_assets.depreciation') }}"><span class="side-icon">∑</span> Depreciation</a>
+  <a class="side-link" href="{{ url_for('fixed_assets.cwip') }}"><span class="side-icon">▧</span> CWIP Projects</a>
+  <a class="side-link" href="{{ url_for('fixed_assets.trial_balance') }}"><span class="side-icon">⇧</span> Trial Balance &amp; GL</a>
+  <a class="side-link" href="{{ url_for('fixed_assets.reconciliation') }}"><span class="side-icon">↔</span> FAR Reconciliation</a>
+  <a class="side-link" href="{{ url_for('fixed_assets.verification') }}"><span class="side-icon">☑</span> Physical Verification</a>
+  <a class="side-link" href="{{ url_for('fixed_assets.insurance') }}"><span class="side-icon">◇</span> Insurance</a>
+  <a class="side-link" href="{{ url_for('fixed_assets.tax_schedules') }}"><span class="side-icon">▥</span> Tax &amp; Deferred Tax</a>
+  <a class="side-link" href="{{ url_for('fixed_assets.periods') }}"><span class="side-icon">▣</span> Period Controls</a>
+  <a class="side-link" href="{{ url_for('fixed_assets.audit_pack') }}"><span class="side-icon">⇩</span> Audit Pack Export</a>
+  <a class="side-link" href="{{ url_for('fixed_assets.audit_log') }}"><span class="side-icon">◷</span> Asset Audit Log</a>{% endif %}
+  <a class="side-link {{ 'active' if request.endpoint in ['cases','case_detail'] else '' }}" href="{{ url_for('cases') }}"><span class="side-icon">▤</span> {{ 'My Requests' if current_role == 'initiator' else 'Case Register' }}</a>
+  {% if current_role == 'tax' %}
+  <a class="side-link {{ 'active' if request.endpoint == 'notifications' else '' }}" href="{{ url_for('notifications') }}"><span class="side-icon">♧</span> Notifications {% if unread_notification_count %}<span class="badge bg-danger ms-auto">{{ unread_notification_count }}</span>{% endif %}</a>
+  <a class="side-link {{ 'active' if request.endpoint in ['tax_update','case_history'] else '' }}" href="{{ url_for('cases') }}"><span class="side-icon">◎</span> TRA Tracking</a>
+  <a class="side-link {{ 'active' if request.endpoint == 'reconciliation_home' else '' }}" href="{{ url_for('reconciliation_home', type='VAT') }}"><span class="side-icon">↔</span> VAT &amp; WHT Reconciliation</a>
+  <a class="side-link {{ 'active' if request.endpoint and request.endpoint.startswith('cancellation_tracker') else '' }}" href="{{ url_for('cancellation_tracker') }}"><span class="side-icon">↻</span> Register Cancellations</a>
+  <a class="side-link" href="{{ url_for('dashboard') }}"><span class="side-icon">▥</span> Reports</a>
+  {% endif %}
+  <div class="sidebar-bottom"><div class="sidebar-mini-logo">C</div><strong>Stronger compliance.</strong><span>Clear records. Better control.</span><div class="brand-stripe"><i></i><i></i><i></i></div></div>
+ </aside>
+ {% endif %}
+ <main class="main-content {% if not current_role %}no-sidebar{% endif %}">
+  {% with messages = get_flashed_messages(with_categories=true) %}{% if messages %}{% for category, message in messages %}
+  <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">{{ message }}<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+  {% endfor %}{% endif %}{% endwith %}
+  {% block content %}{% endblock %}
+  <footer class="app-footer"><span><strong>CETTP V2.9</strong> <span class="footer-divider">|</span> CETTP &amp; Fixed Asset Governance Portal</span><span>Internal use only · Britam</span></footer>
+ </main>
+</div>
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.datatables.net/2.1.8/js/dataTables.min.js"></script>
+<script src="https://cdn.datatables.net/2.1.8/js/dataTables.bootstrap5.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+{% block scripts %}{% endblock %}
+</body></html>

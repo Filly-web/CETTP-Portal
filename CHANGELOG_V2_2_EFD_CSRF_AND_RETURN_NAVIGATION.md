@@ -1,13 +1,16 @@
-# CETTP v2.2 – EFD CSRF and Return Navigation Fix
+# V1.1 Monthly Premium Register Tracking Enhancement
 
-## Fixes
-- Added the Flask-WTF CSRF token as a hidden field in the EFD invoice processing form. This allows the globally enabled CSRF protection in `app.py` to validate the POST request to `/efd-invoice/process`.
-- Added a prominent **Back to CETTP Portal** link on the EFD dashboard and processing-history page. Both links return to the CETTP home page (`/`).
-- Kept the existing EFD invoice processing route protected by CSRF; no global CSRF exemption was introduced.
-- Kept the existing CETTP and EFD routes, dependencies, and database configuration unchanged.
+- Added a required reconciliation-month selector to Premium Register uploads.
+- Added a persistent monthly upload history with source file, transaction counts, negative-premium count, exact-match count, different-amount count, pure-cancellation count, uploader and upload timestamp.
+- Each upload receives its own batch identifier. Uploading a month again creates a separate retained batch; it does not overwrite earlier tracking records.
+- Added month filtering and per-month Excel exports, with an all-month export option.
+- Excel exports include the reporting month, cancellation/endorsement reason, TRA status/reference, and CETTP case reference.
+- Implemented the history in a new database table so the existing V1.1 `CancellationTrack` and `Case` tables are not changed. `db.create_all()` creates the new table at application startup.
+- No V1.2 persistence hardening changes were intentionally added.
 
-## Deployment
-Replace the application files from this package in the existing repository and redeploy the existing Render service. Keep the current `DATABASE_URL`, `SECRET_KEY`, and EFD persistent-storage environment settings unchanged. The CSRF fix relies on the existing Flask session and secret key; users should load a fresh EFD dashboard page before submitting an invoice after deployment.
-
-## Validation
-Python syntax compilation and ZIP integrity were checked. A live Flask request test was not possible in the build environment because Flask dependencies are not installed there.
+## Duplicate cancellation / endorsement controls
+- Added duplicate-action detection across initiator-created CETTP cases and Premium Register tracking records.
+- Exact duplicate actions are identified using normalized policy number plus action type, effective/transaction date, document/invoice number, and absolute adjustment amount.
+- Initiator submissions are stopped with a clear alert when an exact duplicate already exists; related actions on the same policy are flagged for review without blocking legitimate separate endorsements.
+- Premium Register uploads skip exact duplicates already in CETTP, in prior register uploads, or repeated within the same upload, and display a summary alert.
+- Import-to-CETTP avoids creating a second case for an action already initiated and links the tracker row to the existing CETTP case when available.

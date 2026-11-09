@@ -1,10 +1,24 @@
-# Initiator email-only access (pilot)
+# Notification recipient(s), comma or semicolon separated. Gmail is a recipient only; it is not the sender.
+CETTP_TAX_COMPLIANCE_EMAIL=fillyrichard98@gmail.com
 
-- Initiators enter an email address without a password.
-- The email is stored in the session and recorded as the initiator identity on new cases.
-- Initiator name is read-only in the case form to keep attribution consistent.
-- Basic email format validation is applied.
-- Tax Compliance access behavior is unchanged.
+# Microsoft 365 SMTP submission — obtain approved values from Britam IT
+M365_SMTP_HOST=smtp.office365.com
+M365_SMTP_PORT=587
+M365_SMTP_USERNAME=approved-sender@example.com
+M365_SMTP_PASSWORD=replace-with-secret-from-secure-environment
+M365_SMTP_FROM=approved-sender@example.com
 
-## Security limitation
-Email-only access does not authenticate or verify the person. Anyone can enter another person's email address. This should be limited to a controlled pilot and should not be treated as secure production access. Add verified email/SSO or password authentication before handling sensitive production records.
+# Public CETTP URL, without a trailing slash
+CETTP_BASE_URL=https://your-approved-cettp-host
+
+# Existing application secrets (set strong production values)
+SECRET_KEY=replace-with-a-long-random-secret
+
+# Fixed Asset Governance – first month of the financial year (January = 1)
+FA_FY_START_MONTH=1
+
+# Existing CETTP Tax Compliance shared access gate (use a strong, unique value)
+TAX_ACCESS_CODE=replace-with-approved-strong-access-code
+
+# Existing PostgreSQL connection (Render normally injects DATABASE_URL)
+# DATABASE_URL=postgresql://user:password@host:5432/database
