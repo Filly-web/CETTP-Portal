@@ -1,4 +1,4 @@
-# CETTP V3.0.0 – Build verification
+# CETTP V3.0.1 – Build verification
 
 ## Checks completed
 - `app.py` and `efd_portal.py` passed Python syntax compilation.
@@ -15,4 +15,4 @@
 - No production data or environment settings were changed.
 
 ## Deployment verification required
-After deployment to the existing Render service, confirm `/health` returns `3.0.0-vat-control`, then upload a test copy of the ERP workbook and check the monthly control account before importing a production ledger batch.
+After deployment to the existing Render service, confirm `/health` returns `3.0.1-vat-control`, then upload a test copy of the ERP workbook and check the monthly control account before importing a production ledger batch.

@@ -1,4 +1,4 @@
-# CETTP V3.0.0 – VAT Control Account
+# CETTP V3.0.1 – VAT Control Account
 
 ## Location
 The VAT Control Account is a Tax Compliance Workspace tool. It is available from the Tax Compliance sidebar and the Tax Compliance dashboard. It is not a separate portal and is not integrated with the Fixed Asset Governance (FAR) application.
@@ -36,4 +36,4 @@ The VAT Control Account is a Tax Compliance Workspace tool. It is available from
 - `vat_audit_log`
 
 ## Version
-`3.0.0-vat-control`
+`3.0.1-vat-control`
