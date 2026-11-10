@@ -1,13 +1,9 @@
-# CETTP V2.3 — EFD Template Namespace Fix
+# V2.6 – Month-specific compliance calendar and separate TRA/ZRA VAT
 
-## Issue
-The EFD history route rendered `history.html`, which could resolve to CETTP's case-history template. That template expects a `case` variable and caused `jinja2.exceptions.UndefinedError: 'case' is undefined`.
-
-## Fix
-- EFD history explicitly renders `efd_portal/history.html`.
-- EFD dashboard explicitly renders `efd_portal/index.html`.
-- The EFD processing history query and its records are unchanged.
-- CSRF protection and the Back to CETTP Portal navigation remain in place.
-
-## Deployment
-Update the existing repository/service with the ZIP contents. Keep the existing Render service, database URL, and environment variables unchanged. Back up existing data first. Verify the EFD dashboard, history, invoice generation, Initiator login, and Tax Compliance login after deployment.
+- Compliance Calendar now defaults to the current month and displays only deadlines due within that month.
+- Added previous/next month navigation. Month and year selections are retained when filtering by tax type or status.
+- Dashboard counters (due in 7 days, due today, overdue, payment pending and completed) are calculated only from obligations in the selected month.
+- Monthly VAT obligations are generated separately as TRA VAT Return and ZRA VAT Return, both due on the 20th.
+- Existing system-generated generic VAT Return records are upgraded in place to TRA VAT Return to avoid duplicate TRA VAT rows; ZRA VAT is added as a separate obligation.
+- Manual deadlines remain visible in the month in which their due date falls.
+- No new database tables or migrations are introduced.

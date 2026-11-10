@@ -1,13 +1,13 @@
-# CETTP v2.2 – EFD CSRF and Return Navigation Fix
+# V2.4 – Tax Compliance Calendar & Monitoring
 
-## Fixes
-- Added the Flask-WTF CSRF token as a hidden field in the EFD invoice processing form. This allows the globally enabled CSRF protection in `app.py` to validate the POST request to `/efd-invoice/process`.
-- Added a prominent **Back to CETTP Portal** link on the EFD dashboard and processing-history page. Both links return to the CETTP home page (`/`).
-- Kept the existing EFD invoice processing route protected by CSRF; no global CSRF exemption was introduced.
-- Kept the existing CETTP and EFD routes, dependencies, and database configuration unchanged.
+- Added a Tax Compliance Calendar service option and Tax Compliance sidebar navigation.
+- Added manual creation and editing of separate filing/payment obligations, due dates, periods, assigned officers, status, completion dates, payment amounts and control numbers.
+- Added dashboard counts for due in seven days, due today, overdue, payment pending and completed.
+- Added document evidence uploads stored in the application database, CSV export, and per-obligation audit history.
+- Added overdue status calculation without overwriting the saved workflow status.
 
-## Deployment
-Replace the application files from this package in the existing repository and redeploy the existing Render service. Keep the current `DATABASE_URL`, `SECRET_KEY`, and EFD persistent-storage environment settings unchanged. The CSRF fix relies on the existing Flask session and secret key; users should load a fresh EFD dashboard page before submitting an invoice after deployment.
+## Deployment and database
+The app's existing startup `db.create_all()` will create the three new calendar tables on startup without dropping or replacing existing tables. Existing `DATABASE_URL`, Render service, and EFD portal configuration are unchanged. Back up the production database before deployment.
 
-## Validation
-Python syntax compilation and ZIP integrity were checked. A live Flask request test was not possible in the build environment because Flask dependencies are not installed there.
+## Important
+This release does not hard-code statutory due dates or automatically create future periods. Tax Compliance must enter and validate each deadline against current TRA/statutory requirements. Filing and payment dates should be separate obligations where they differ. Reminders are currently visible through the dashboard counters and overdue labels; background email/push reminders are not included in this first release.

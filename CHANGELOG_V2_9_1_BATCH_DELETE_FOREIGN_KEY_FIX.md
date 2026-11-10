@@ -1,9 +1,13 @@
-# CETTP V2.0 – Case Editing and Returned Request Resubmission
+# CETTP v2.2 – EFD CSRF and Return Navigation Fix
 
-- Tax Compliance can edit submitted case details, including policy number, customer/insured name and TIN, request type, effective date, reason, product, branch, underwriter, invoice number and financial amounts.
-- Initiators can edit only cases in `Returned for Clarification` and resubmit them to `Under Tax Review`.
-- Initiator ownership checks remain enforced; an initiator cannot edit another initiator's case.
-- Case changes are recorded in the existing audit history.
-- Resubmission creates an in-app notification for Tax Compliance. Tax Compliance edits trigger an initiator notification.
-- Existing attachments remain attached. Editing does not require uploading the cancelled invoice/EFD again, but additional supporting documents can be added.
-- No database schema change is required; the existing case fields and notification tables are reused.
+## Fixes
+- Added the Flask-WTF CSRF token as a hidden field in the EFD invoice processing form. This allows the globally enabled CSRF protection in `app.py` to validate the POST request to `/efd-invoice/process`.
+- Added a prominent **Back to CETTP Portal** link on the EFD dashboard and processing-history page. Both links return to the CETTP home page (`/`).
+- Kept the existing EFD invoice processing route protected by CSRF; no global CSRF exemption was introduced.
+- Kept the existing CETTP and EFD routes, dependencies, and database configuration unchanged.
+
+## Deployment
+Replace the application files from this package in the existing repository and redeploy the existing Render service. Keep the current `DATABASE_URL`, `SECRET_KEY`, and EFD persistent-storage environment settings unchanged. The CSRF fix relies on the existing Flask session and secret key; users should load a fresh EFD dashboard page before submitting an invoice after deployment.
+
+## Validation
+Python syntax compilation and ZIP integrity were checked. A live Flask request test was not possible in the build environment because Flask dependencies are not installed there.

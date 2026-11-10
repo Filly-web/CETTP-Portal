@@ -1,8 +1,9 @@
-# CETTP V1.1 — Case and Batch Administration
+# V1.1 enhancement — In-app Tax Compliance notifications
 
-- Added Tax Compliance-only deletion for individual Case Register records.
-- Deleting a case also removes linked Premium Register tracker rows to prevent stale tracking and re-import confusion.
-- Added individual Premium Register tracker-row deletion.
-- Added monthly upload batch deletion from upload history. It removes the selected batch's tracker rows and register-imported cases, while preserving cases originally initiated by users.
-- Added Case Register Excel export, respecting current search, workflow-status, and request-type filters.
-- Added confirmation prompts and CSRF-protected POST forms for destructive actions.
+- Added in-app alerts when a new cancellation or endorsement request is submitted.
+- Added a Tax Compliance notification center with unread/read labels and timestamps.
+- Added per-actor read receipts, mark-one-as-read/open-case, and mark-all-as-read actions.
+- Added unread count badge to the navigation bar and sidebar.
+- In-app notifications work without an email address or Microsoft 365 configuration.
+- Email remains optional and separate; request submission is retained if email delivery is not configured or fails.
+- Added `InAppNotification` and `InAppNotificationRead` database tables through the existing `db.create_all()` startup setup.

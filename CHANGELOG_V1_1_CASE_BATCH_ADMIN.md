@@ -1,16 +1,56 @@
-{% extends "base.html" %}{% block title %}Welcome | CETTP{% endblock %}
-{% block content %}
-<section class="welcome-banner">
- <div class="welcome-copy"><div class="eyebrow light">INSURANCE TAX OPERATIONS</div><h1>Welcome to Britam CETTP</h1><p>Manage tax compliance, policy cancellation and endorsement controls, EFD invoice support and fixed asset governance from one integrated portal.</p></div>
- <div class="banner-art"><div class="banner-circle circle-one"></div><div class="banner-circle circle-two"></div><div class="document-illustration"><span class="doc-line long"></span><span class="doc-line"></span><span class="doc-line short"></span><div class="doc-stamp">✓</div></div></div>
-</section>
-<div class="page-intro"><div><div class="eyebrow">GET STARTED</div><h2 class="page-title">Choose a service</h2><p class="text-muted mb-0">Select a workspace or the EFD-to-Invoice service you need.</p></div></div>
-<div class="row g-4">
- <div class="col-lg-4"><div class="role-card role-initiator"><div class="role-card-top"><div class="role-icon">＋</div><span class="role-label">REQUEST CREATION</span></div><h2>Initiator Workspace</h2><p>Create a new policy cancellation or endorsement, capture customer and invoice details, and submit the request for Tax Compliance review.</p><ul class="feature-list"><li>Submit cancellation requests</li><li>Submit endorsement requests</li><li>Receive a unique tracking reference</li></ul><a class="btn btn-primary btn-lg w-100" href="{{ url_for('enter_initiator_role') }}">Enter as Initiator <span class="float-end">→</span></a></div></div>
- <div class="col-lg-4"><div class="role-card role-tax"><div class="role-card-top"><div class="role-icon green-icon">✓</div><span class="role-label green-label">CONTROL &amp; COMPLIANCE</span></div><h2>Tax Compliance Workspace</h2><p>Review requests, maintain tax documents, track TRA submissions and approvals, and record final closure.</p><ul class="feature-list"><li>Manage tax and TRA statuses</li><li>Track credit notes and replacement invoices</li><li>Maintain case history and oversight</li></ul><a class="btn btn-dark btn-lg w-100" href="{{ url_for('enter_tax_role') }}">Open Tax Workspace <span class="float-end">→</span></a></div></div>
- <div class="col-lg-4"><div class="role-card role-tax"><div class="role-card-top"><div class="role-icon green-icon">▦</div><span class="role-label green-label">FINANCIAL MANAGEMENT</span></div><h2>Fixed Asset Governance</h2><p>Manage the official fixed asset register, depreciation, asset movements, disposals and FAR-to-Trial-Balance reconciliation.</p><ul class="feature-list"><li>Import and validate the existing FAR</li><li>Run depreciation and manage disposals</li><li>Reconcile asset balances to the Trial Balance</li></ul><a class="btn btn-dark btn-lg w-100" href="{{ url_for('enter_tax_role', next=url_for('fixed_assets.dashboard')) }}">Open Fixed Asset Workspace <span class="float-end">→</span></a></div></div>
- <div class="col-lg-4"><div class="role-card role-efd"><div class="role-card-top"><div class="role-icon" style="background:#e8f4ff;color:#0874d1">▣</div><span class="role-label">INVOICE SUPPORT</span></div><h2>EFD-to-Invoice Portal</h2><p>Upload a Word invoice, add the TRA verification code and receipt time, and generate a document with EFD verification details and a QR code.</p><ul class="feature-list"><li>Process .docx invoice templates</li><li>Generate TRA verification QR details</li><li>Review processing history</li></ul><a class="btn btn-primary btn-lg w-100" href="{{ url_for('efd_portal.dashboard') }}">Open EFD Portal <span class="float-end">→</span></a></div></div>
+"""Regression test for Premium Register batch deletion.
 
-</div>
-<div class="home-info-strip mt-4"><div class="info-icon">i</div><div><strong>One portal. Four integrated services.</strong><p class="mb-0">Choose CETTP case tracking, Tax Compliance review, Fixed Asset Governance or the EFD-to-Invoice utility from one entry point.</p></div></div>
-{% endblock %}
+Run with: python -m unittest discover -s tests
+The test uses an isolated in-memory SQLite database and does not touch Render.
+"""
+import os
+import unittest
+
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+os.environ["SECRET_KEY"] = "test-only-secret"
+
+from app import app, db, Case, RegisterUpload, CancellationTrack
+
+
+class BatchDeleteRegressionTest(unittest.TestCase):
+    def setUp(self):
+        app.config.update(TESTING=True, WTF_CSRF_ENABLED=False)
+        self.client = app.test_client()
+        with self.client.session_transaction() as sess:
+            sess["role"] = "tax"
+            sess["actor_name"] = "Batch Delete Test"
+        with app.app_context():
+            db.drop_all()
+            db.create_all()
+            shared_case = Case(
+                reference="TEST-CASE-001", case_type="Cancellation",
+                policy_number="POL-001", customer_name="Test Customer",
+                reason="Test reason", effective_date=__import__("datetime").date(2026, 1, 1),
+                initiator_name="Premium Register Import", workflow_status="Initiated",
+            )
+            db.session.add(shared_case)
+            db.session.flush()
+            self.case_id = shared_case.id
+            first = RegisterUpload(upload_batch="BATCH-ONE", period="2026-01", file_name="one.xlsx")
+            second = RegisterUpload(upload_batch="BATCH-TWO", period="2026-01", file_name="two.xlsx")
+            db.session.add_all([first, second])
+            db.session.flush()
+            self.upload_id = first.id
+            db.session.add_all([
+                CancellationTrack(upload_batch="BATCH-ONE", policy_number="POL-001", classification="Pure cancellation", case_id=shared_case.id),
+                CancellationTrack(upload_batch="BATCH-TWO", policy_number="POL-001", classification="Pure cancellation", case_id=shared_case.id),
+            ])
+            db.session.commit()
+
+    def test_delete_batch_removes_only_its_rows_and_preserves_shared_case(self):
+        response = self.client.post(f"/cancellation-tracker/batch/{self.upload_id}/delete", follow_redirects=False)
+        self.assertIn(response.status_code, (302, 303))
+        with app.app_context():
+            self.assertIsNone(RegisterUpload.query.filter_by(upload_batch="BATCH-ONE").first())
+            self.assertEqual(CancellationTrack.query.filter_by(upload_batch="BATCH-ONE").count(), 0)
+            self.assertEqual(CancellationTrack.query.filter_by(upload_batch="BATCH-TWO").count(), 1)
+            self.assertIsNotNone(db.session.get(Case, self.case_id))
+
+
+if __name__ == "__main__":
+    unittest.main()
