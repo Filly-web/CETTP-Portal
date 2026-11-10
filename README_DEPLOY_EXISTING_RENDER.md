@@ -1,18 +1,48 @@
-# CETTP V2.9.2 – Safe Premium Register Batch Deletion
+# CETTP V3.0.0 – Existing Render service deployment
 
-## Batch deletion changes
-- Replaced the previous ORM/case-deletion sequence with a database-side delete scoped to the selected upload's unique `upload_batch` key.
-- The selected `RegisterUpload` and its `CancellationTrack` rows are deleted in one database transaction.
-- CETTP `Case` records are deliberately retained. A case may be shared by another Premium Register batch or contain audit logs, attachments and notifications; batch deletion must not delete formal case history.
-- If any database operation fails, the transaction is rolled back and no partial deletion is committed.
-- Full exception details are written to the Render application log. The user receives a timestamp reference to help locate the relevant log entry.
-- Updated the confirmation prompt and success message to explain that CETTP cases are retained.
-- Updated `/health` version to `2.9.2-safe-batch-delete`.
+This package is arranged with the application files at the ZIP root. In particular, `requirements.txt` contains **only pip package requirements**. Do not copy the text of this README or any changelog into `requirements.txt`.
 
-## Database and deployment safety
-- No database schema migration is included.
-- No `DATABASE_URL`, database attachment, Render service, or production data is changed by this source package.
-- No FAR module or FAR navigation is included.
+## Deploy to the existing Render service
 
-## Regression test
-`tests/test_batch_delete.py` tests deletion against an isolated in-memory SQLite database, including a case shared by two batches. Run with `python -m unittest discover -s tests` in an environment with the requirements installed.
+1. Back up the current production database before deploying.
+2. Extract this ZIP. The files `app.py`, `requirements.txt`, `Procfile`, `runtime.txt`, `templates/` and `static/` should be directly inside the repository root (not inside another nested `CETTP_Integrated/` directory).
+3. Update the existing GitHub repository with these files. Do not create a new Render service or a new database.
+4. In the existing Render Web Service, keep the current database attachment and environment variables unchanged. In particular, do not change `DATABASE_URL` or `SECRET_KEY`.
+5. Confirm the existing service's Root Directory is blank (repository root). Use:
+   - Build command: `pip install -r requirements.txt`
+   - Start command: `gunicorn app:app`
+6. Deploy the existing service. Check `/health` and review Render Logs after deployment.
+7. Sign in as an Initiator, create one test request with the mandatory cancelled invoice/EFD attachment, and confirm that it appears in the Tax Compliance Case Register and Notifications.
+
+## What this release addresses
+
+- Initiator email is used as the Initiator username; no OTP or password is requested for Initiator entry.
+- Initiator name is taken from the login email and is not required as an editable form field.
+- Form validation errors are displayed and written to the application log rather than silently redisplaying the form.
+- Case, attachment, audit entry and Tax Compliance in-app notification are committed in one database transaction. On a database error, the transaction is rolled back and the exception is logged.
+- Tax Compliance login controls are unchanged.
+- Existing `DATABASE_URL` configuration is unchanged. No database or Render service is defined in this package.
+
+## Requirements file
+
+`requirements.txt` is a plain UTF-8 list of Python dependencies, one per line. Keep explanatory notes, README text and changelogs out of this file.
+
+## Important
+
+The Initiator email-only login does not verify ownership of the email address. Use it only within a controlled pilot environment. A successful code build does not by itself prove that the production database is reachable; verify one test submission in the deployed service.
+
+## V2.9.2 Premium Register batch deletion
+- This release deletes only the selected upload history row and its tracker rows.
+- Linked CETTP cases are retained to protect case workflow and audit history, including cases shared by more than one register batch.
+- A failed operation is rolled back. Check Render Logs for `Premium Register batch deletion failed` and use the timestamp reference displayed in the portal.
+- After deployment, confirm `/health` reports `3.0.0-vat-control`, then test deletion using a non-critical test upload before deleting a live batch.
+
+
+## V2.9.3 foreign-key batch deletion fix
+- Deletes only the selected batch tracker rows before deleting its upload-history row.
+- Does not delete linked Case records.
+- Includes an explicit flush after child-row deletion and rolls back on failure.
+
+
+## V3.0.0 VAT Control Account
+See `README_V3_0_0_VAT_CONTROL_ACCOUNT.md` for the VAT Control Account workflow and `CHANGELOG_V3_0_0_VAT_CONTROL_ACCOUNT.md` for its implementation details. The module adds new tables only; it does not change the existing database URL or Render service configuration.
