@@ -1,22 +1,14 @@
-{% extends "base.html" %}
-{% block title %}Initiator Access | CETTP{% endblock %}
+{% extends "base.html" %}{% block title %}Welcome | CETTP{% endblock %}
 {% block content %}
-<div class="row justify-content-center py-4">
-  <div class="col-md-7 col-lg-5">
-    <div class="card border-0 shadow-sm">
-      <div class="card-body p-4 p-md-5">
-        <div class="eyebrow">INITIATOR WORKSPACE</div>
-        <h1 class="h3 mb-2">Continue with your email</h1>
-        <p class="text-muted">Use your work email address as your username. No password, OTP, or verification code is required.</p>
-        <form method="post">
-          <label for="email" class="form-label">Work email address</label>
-          <input id="email" name="email" type="email" class="form-control mb-3" placeholder="name@company.com" autocomplete="email" required maxlength="254" autofocus>
-          <button class="btn btn-primary btn-sm w-100" type="submit">Continue to CETTP <span class="float-end">→</span></button>
-        </form>
-        <div class="alert alert-warning small mt-4 mb-0" role="alert"><strong>Pilot access:</strong> No password or email verification is currently required. Anyone who knows an email address could enter it, so this mode records identity but does not verify it. Use only in a controlled test environment until approved authentication is added.</div>
-      </div>
-    </div>
-    <div class="text-center mt-3"><a href="{{ url_for('home') }}" class="small">← Back to role selection</a></div>
-  </div>
+<section class="welcome-banner">
+ <div class="welcome-copy"><div class="eyebrow light">INSURANCE TAX OPERATIONS</div><h1>Welcome to Britam CETTP</h1><p>Manage tax compliance, policy cancellation and endorsement controls, EFD invoice support and filing deadlines from one integrated portal.</p></div>
+ <div class="banner-art"><div class="banner-circle circle-one"></div><div class="banner-circle circle-two"></div><div class="document-illustration"><span class="doc-line long"></span><span class="doc-line"></span><span class="doc-line short"></span><div class="doc-stamp">✓</div></div></div>
+</section>
+<div class="page-intro"><div><div class="eyebrow">GET STARTED</div><h2 class="page-title">Choose a service</h2><p class="text-muted mb-0">Select a workspace or the EFD-to-Invoice service you need.</p></div></div>
+<div class="row g-4">
+ <div class="col-lg-4"><div class="role-card role-initiator"><div class="role-card-top"><div class="role-icon">＋</div><span class="role-label">REQUEST CREATION</span></div><h2>Initiator Workspace</h2><p>Create a new policy cancellation or endorsement, capture customer and invoice details, and submit the request for Tax Compliance review.</p><ul class="feature-list"><li>Submit cancellation requests</li><li>Submit endorsement requests</li><li>Receive a unique tracking reference</li></ul><a class="btn btn-primary btn-lg w-100" href="{{ url_for('enter_initiator_role') }}">Enter as Initiator <span class="float-end">→</span></a></div></div>
+ <div class="col-lg-4"><div class="role-card role-tax"><div class="role-card-top"><div class="role-icon green-icon">✓</div><span class="role-label green-label">CONTROL &amp; COMPLIANCE</span></div><h2>Tax Compliance Workspace</h2><p>Review requests, maintain tax documents, track TRA submissions and approvals, and record final closure.</p><ul class="feature-list"><li>Manage tax and TRA statuses</li><li>Track credit notes and replacement invoices</li><li>Maintain case history and oversight</li></ul><a class="btn btn-dark btn-lg w-100" href="{{ url_for('enter_tax_role') }}">Open Tax Workspace <span class="float-end">→</span></a></div></div>
+ <div class="col-lg-4"><div class="role-card role-efd"><div class="role-card-top"><div class="role-icon" style="background:#e8f4ff;color:#0874d1">▣</div><span class="role-label">INVOICE SUPPORT</span></div><h2>EFD-to-Invoice Portal</h2><p>Upload a Word invoice, add the TRA verification code and receipt time, and generate a document with EFD verification details and a QR code.</p><ul class="feature-list"><li>Process .docx invoice templates</li><li>Generate TRA verification QR details</li><li>Review processing history</li></ul><a class="btn btn-primary btn-lg w-100" href="{{ url_for('efd_portal.dashboard') }}">Open EFD Portal <span class="float-end">→</span></a></div></div>
+
 </div>
 {% endblock %}
