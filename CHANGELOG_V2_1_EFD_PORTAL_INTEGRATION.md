@@ -1,8 +1,10 @@
-# CETTP v2.1 — EFD-to-Invoice Portal Integration
+# Initiator email-only access (pilot)
 
-- Added EFD-to-Invoice as a third option on the pre-login service selection page.
-- Mounted the existing EFD invoice processing utility under `/efd-invoice/` using a Flask Blueprint to avoid route collisions with CETTP.
-- Preserved Initiator and Tax Compliance workflows and case-edit/resubmission features.
-- Added `python-docx` and `qrcode[pil]` dependencies.
-- EFD processing history remains in its own SQLite database, configurable through `EFD_PORTAL_DATA_DIR`; configure persistent storage for durable history on Render.
-- EFD utility currently has no role login; access should be restricted to approved internal users.
+- Initiators enter an email address without a password.
+- The email is stored in the session and recorded as the initiator identity on new cases.
+- Initiator name is read-only in the case form to keep attribution consistent.
+- Basic email format validation is applied.
+- Tax Compliance access behavior is unchanged.
+
+## Security limitation
+Email-only access does not authenticate or verify the person. Anyone can enter another person's email address. This should be limited to a controlled pilot and should not be treated as secure production access. Add verified email/SSO or password authentication before handling sensitive production records.
