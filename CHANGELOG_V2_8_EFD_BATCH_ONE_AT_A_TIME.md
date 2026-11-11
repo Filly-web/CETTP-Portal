@@ -1,17 +1,13 @@
-# V2.8 – EFD Batch Processing: Add One Invoice at a Time
+# CETTP v2.2 – EFD CSRF and Return Navigation Fix
 
-## Changes
-- Replaced multi-file selection with a one-invoice-per-upload workflow.
-- Each upload captures its own TRA EFD verification code and receipt time immediately.
-- Uploaded invoices are staged in the configured EFD portal data directory and associated with the browser session's batch.
-- Added a review table showing each staged invoice and its EFD details.
-- Added per-invoice removal and clear-batch actions.
-- Added a final action to process all staged invoices and download one ZIP package with processed/failed folders and a CSV report.
-- Single-invoice `/process` route and single-invoice dashboard workflow remain unchanged.
-- Added a SQLite staging table to the existing EFD history database; no existing history rows are altered.
+## Fixes
+- Added the Flask-WTF CSRF token as a hidden field in the EFD invoice processing form. This allows the globally enabled CSRF protection in `app.py` to validate the POST request to `/efd-invoice/process`.
+- Added a prominent **Back to CETTP Portal** link on the EFD dashboard and processing-history page. Both links return to the CETTP home page (`/`).
+- Kept the existing EFD invoice processing route protected by CSRF; no global CSRF exemption was introduced.
+- Kept the existing CETTP and EFD routes, dependencies, and database configuration unchanged.
 
-## Deployment notes
-- Keep `EFD_PORTAL_DATA_DIR` / `PORTAL_DATA_DIR` on persistent storage in Render. Staged files are held under `batch_staging/` until the batch is downloaded or cleared.
-- The existing `portal_history.db` will automatically create the new `batch_staging` table at startup.
-- No change to the main CETTP database or its `DATABASE_URL` is required.
-- Batch staging is session-associated. Use the same browser session while building a batch.
+## Deployment
+Replace the application files from this package in the existing repository and redeploy the existing Render service. Keep the current `DATABASE_URL`, `SECRET_KEY`, and EFD persistent-storage environment settings unchanged. The CSRF fix relies on the existing Flask session and secret key; users should load a fresh EFD dashboard page before submitting an invoice after deployment.
+
+## Validation
+Python syntax compilation and ZIP integrity were checked. A live Flask request test was not possible in the build environment because Flask dependencies are not installed there.

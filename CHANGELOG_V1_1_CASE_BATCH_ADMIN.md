@@ -1,56 +1,21 @@
-"""Regression test for Premium Register batch deletion.
-
-Run with: python -m unittest discover -s tests
-The test uses an isolated in-memory SQLite database and does not touch Render.
-"""
-import os
-import unittest
-
-os.environ["DATABASE_URL"] = "sqlite:///:memory:"
-os.environ["SECRET_KEY"] = "test-only-secret"
-
-from app import app, db, Case, RegisterUpload, CancellationTrack
-
-
-class BatchDeleteRegressionTest(unittest.TestCase):
-    def setUp(self):
-        app.config.update(TESTING=True, WTF_CSRF_ENABLED=False)
-        self.client = app.test_client()
-        with self.client.session_transaction() as sess:
-            sess["role"] = "tax"
-            sess["actor_name"] = "Batch Delete Test"
-        with app.app_context():
-            db.drop_all()
-            db.create_all()
-            shared_case = Case(
-                reference="TEST-CASE-001", case_type="Cancellation",
-                policy_number="POL-001", customer_name="Test Customer",
-                reason="Test reason", effective_date=__import__("datetime").date(2026, 1, 1),
-                initiator_name="Premium Register Import", workflow_status="Initiated",
-            )
-            db.session.add(shared_case)
-            db.session.flush()
-            self.case_id = shared_case.id
-            first = RegisterUpload(upload_batch="BATCH-ONE", period="2026-01", file_name="one.xlsx")
-            second = RegisterUpload(upload_batch="BATCH-TWO", period="2026-01", file_name="two.xlsx")
-            db.session.add_all([first, second])
-            db.session.flush()
-            self.upload_id = first.id
-            db.session.add_all([
-                CancellationTrack(upload_batch="BATCH-ONE", policy_number="POL-001", classification="Pure cancellation", case_id=shared_case.id),
-                CancellationTrack(upload_batch="BATCH-TWO", policy_number="POL-001", classification="Pure cancellation", case_id=shared_case.id),
-            ])
-            db.session.commit()
-
-    def test_delete_batch_removes_only_its_rows_and_preserves_shared_case(self):
-        response = self.client.post(f"/cancellation-tracker/batch/{self.upload_id}/delete", follow_redirects=False)
-        self.assertIn(response.status_code, (302, 303))
-        with app.app_context():
-            self.assertIsNone(RegisterUpload.query.filter_by(upload_batch="BATCH-ONE").first())
-            self.assertEqual(CancellationTrack.query.filter_by(upload_batch="BATCH-ONE").count(), 0)
-            self.assertEqual(CancellationTrack.query.filter_by(upload_batch="BATCH-TWO").count(), 1)
-            self.assertIsNotNone(db.session.get(Case, self.case_id))
-
-
-if __name__ == "__main__":
-    unittest.main()
+{% extends "base.html" %}{% block title %}Tax Dashboard | CETTP{% endblock %}
+{% block content %}
+<div class="page-heading"><div><div class="eyebrow">CONTROL CENTRE</div><h1 class="page-title">Dashboard Overview</h1><p class="text-muted mb-0">A live view of policy adjustments and tax processing.</p></div><a class="btn btn-primary" href="{{ url_for('cases') }}">View all cases <span class="ms-2">→</span></a></div>
+<div class="dashboard-banner"><div><span class="banner-tag">TAX COMPLIANCE WORKSPACE</span><h2>Good control starts with clear visibility.</h2><p>Monitor requests, follow up pending TRA actions and keep every case moving towards closure.</p></div><div class="banner-check">✓</div></div>
+<div class="row g-3 mb-4">
+{% for label,value,sub,cls,icon in [('Total Cases',total,'All requests registered','metric-blue','▤'),('Open Cases',open_cases,'Awaiting final closure','metric-green','◷'),('Pending TRA',awaiting_tra,'Not submitted or awaiting response','metric-orange','↗'),('Closed Cases',closed,'Completed workflow','metric-purple','✓')] %}
+<div class="col-6 col-xl-3"><div class="metric-card {{ cls }}"><div class="metric-top"><span>{{ label }}</span><span class="metric-icon">{{ icon }}</span></div><div class="metric-value">{{ value }}</div><div class="metric-sub">{{ sub }}</div><div class="metric-track"><span style="width:{{ (value / total * 100)|round|int if total else 0 }}%"></span></div></div></div>{% endfor %}
+</div>
+<div class="panel mb-4"><div class="panel-heading"><div><h2>Tax Compliance Tools</h2><p>Access the tools available within your Tax Compliance Workspace.</p></div><span class="panel-badge blue-badge">WORKSPACE TOOLS</span></div><div class="row g-3"><div class="col-md-6 col-xl-4"><div class="card h-100 border-0 bg-light"><div class="card-body"><div class="fs-3 mb-2">▦</div><h5 class="fw-bold">Compliance Calendar</h5><p class="text-muted small">Monitor recurring tax returns, corporate tax instalments and one-time TRA assignments, objections, appeals and demand notices.</p><a class="btn btn-primary" href="{{ url_for('tax_calendar') }}">Open Compliance Calendar →</a></div></div></div></div></div>
+<div class="row g-4 mb-4"><div class="col-xl-7"><div class="panel chart-panel h-100"><div class="panel-heading"><div><h2>Workflow pipeline</h2><p>Cases by current workflow status</p></div><span class="panel-badge blue-badge">BY STATUS</span></div><canvas id="statusChart" height="210"></canvas></div></div><div class="col-xl-5"><div class="panel chart-panel h-100"><div class="panel-heading"><div><h2>Request mix</h2><p>Cancellations vs endorsements</p></div><span class="panel-badge purple-badge">BY TYPE</span></div><canvas id="typeChart" height="210"></canvas></div></div></div>
+<div class="panel mb-4"><div class="panel-heading"><div><h2>Overdue case monitoring</h2><p>Open cases pending for {{ overdue_days }} days or more, based on submission date.</p></div><span class="panel-badge {{ 'purple-badge' if overdue_count else 'blue-badge' }}">{{ overdue_count }} OVERDUE</span></div>
+{% if overdue_cases %}<div class="table-responsive"><table class="table table-sm table-hover align-middle cettp-table"><thead><tr><th>Case</th><th>Type</th><th>Policy</th><th>Status</th><th>Age</th><th>Next step</th></tr></thead><tbody>{% for c in overdue_cases %}<tr><td><a href="{{ url_for('case_detail', case_id=c.id) }}">{{ c.reference }}</a></td><td>{{ c.case_type }}</td><td>{{ c.policy_number }}</td><td>{{ c.workflow_status }}</td><td><span class="badge text-bg-warning">{{ ((now_utc - c.created_at).days if now_utc is defined else (overdue_days)) }}+ days</span></td><td><a class="btn btn-sm btn-outline-primary" href="{{ url_for('case_detail', case_id=c.id) }}">Review case</a></td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="alert alert-success mb-0 small">No overdue open cases. Your queue is up to date.</div>{% endif %}</div>
+<div class="panel"><div class="panel-heading"><div><h2>Recent cases</h2><p>Latest requests entered into CETTP</p></div><a class="panel-action" href="{{ url_for('cases') }}">View all cases →</a></div>{% include "_case_table.html" %}</div>
+{% endblock %}
+{% block scripts %}<script>
+const statusLabels={{ by_status|map(attribute=0)|list|tojson }}; const statusValues={{ by_status|map(attribute=1)|list|tojson }};
+const typeLabels={{ by_type|map(attribute=0)|list|tojson }}; const typeValues={{ by_type|map(attribute=1)|list|tojson }};
+Chart.defaults.font.family="'DM Sans', sans-serif"; Chart.defaults.color="#71809a";
+new Chart(document.getElementById('statusChart'),{type:'bar',data:{labels:statusLabels,datasets:[{label:'Cases',data:statusValues,backgroundColor:['#1769e8','#13a66b','#ff941f','#8250df','#18a9c8','#e65d78'],borderRadius:7,maxBarThickness:42}]},options:{responsive:true,plugins:{legend:{display:false}},scales:{x:{grid:{display:false}},y:{beginAtZero:true,ticks:{precision:0},grid:{color:'#edf1f7'}}}}});
+new Chart(document.getElementById('typeChart'),{type:'doughnut',data:{labels:typeLabels,datasets:[{data:typeValues,backgroundColor:['#1769e8','#13a66b','#ffab22','#8250df'],borderWidth:4,borderColor:'#fff',hoverOffset:8}]},options:{cutout:'67%',responsive:true,plugins:{legend:{position:'bottom',labels:{usePointStyle:true,boxWidth:8,padding:18}}}}});
+</script>{% endblock %}

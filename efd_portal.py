@@ -1,7 +1,13 @@
-# V2.7 – Manual Tax Deadline Deletion
+# CETTP V2.3 — EFD Template Namespace Fix
 
-- Added a Delete action beside Edit for manually created tax compliance deadlines.
-- Deletion requires a confirmation prompt and a CSRF-protected POST request.
-- System-generated recurring statutory deadlines are not offered for deletion and are protected by the server route.
-- Deleting a manual deadline also removes its linked evidence and detail audit entries through the existing ORM cascade relationships.
-- No database schema changes or migration are required.
+## Issue
+The EFD history route rendered `history.html`, which could resolve to CETTP's case-history template. That template expects a `case` variable and caused `jinja2.exceptions.UndefinedError: 'case' is undefined`.
+
+## Fix
+- EFD history explicitly renders `efd_portal/history.html`.
+- EFD dashboard explicitly renders `efd_portal/index.html`.
+- The EFD processing history query and its records are unchanged.
+- CSRF protection and the Back to CETTP Portal navigation remain in place.
+
+## Deployment
+Update the existing repository/service with the ZIP contents. Keep the existing Render service, database URL, and environment variables unchanged. Back up existing data first. Verify the EFD dashboard, history, invoice generation, Initiator login, and Tax Compliance login after deployment.

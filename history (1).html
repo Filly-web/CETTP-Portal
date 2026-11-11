@@ -1,22 +1,55 @@
-{% extends "base.html" %}{% block title %}Tax Dashboard | CETTP{% endblock %}
-{% block content %}
-<div class="page-heading"><div><div class="eyebrow">CONTROL CENTRE</div><h1 class="page-title">Dashboard Overview</h1><p class="text-muted mb-0">A live view of policy adjustments and tax processing.</p></div><a class="btn btn-primary" href="{{ url_for('cases') }}">View all cases <span class="ms-2">→</span></a></div>
-<div class="dashboard-banner"><div><span class="banner-tag">TAX COMPLIANCE WORKSPACE</span><h2>Good control starts with clear visibility.</h2><p>Monitor requests, follow up pending TRA actions and keep every case moving towards closure.</p></div><div class="banner-check">✓</div></div>
-<div class="row g-3 mb-4">
-{% for label,value,sub,cls,icon in [('Total Cases',total,'All requests registered','metric-blue','▤'),('Open Cases',open_cases,'Awaiting final closure','metric-green','◷'),('Pending TRA',awaiting_tra,'Not submitted or awaiting response','metric-orange','↗'),('Closed Cases',closed,'Completed workflow','metric-purple','✓')] %}
-<div class="col-6 col-xl-3"><div class="metric-card {{ cls }}"><div class="metric-top"><span>{{ label }}</span><span class="metric-icon">{{ icon }}</span></div><div class="metric-value">{{ value }}</div><div class="metric-sub">{{ sub }}</div><div class="metric-track"><span style="width:{{ (value / total * 100)|round|int if total else 0 }}%"></span></div></div></div>{% endfor %}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}CETTP v1.0{% endblock %}</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdn.datatables.net/2.1.8/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+<link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
+</head>
+<body>
+<nav class="navbar navbar-expand-lg navbar-dark topbar">
+ <div class="container-fluid px-3 px-xl-4">
+  <a class="navbar-brand d-flex align-items-center gap-2" href="{{ url_for('home') }}">
+   <span class="brand-logo">B</span><span>Britam <small class="d-block brand-subtitle">CETTP v1.1</small></span>
+  </a>
+  <div class="topbar-title d-none d-lg-block">Cancellation, Endorsement &amp; Tax Reconciliation Portal</div>
+  <div class="ms-auto d-flex align-items-center gap-2">
+   {% if current_role == 'tax' %}<span class="top-role"><span class="online-dot"></span> Tax Compliance</span><a class="btn btn-sm btn-light position-relative" href="{{ url_for('notifications') }}" aria-label="Notifications">🔔 Notifications{% if unread_notification_count %}<span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger">{{ unread_notification_count if unread_notification_count < 100 else '99+' }}</span>{% endif %}</a>{% elif current_role == 'initiator' %}<span class="top-role"><span class="online-dot"></span> Initiator</span>{% endif %}
+   {% if current_role %}<a class="btn btn-sm btn-light" href="{{ url_for('logout') }}">Exit <span aria-hidden="true">↗</span></a>{% endif %}
+  </div>
+ </div>
+</nav>
+<div class="app-shell">
+ {% if current_role %}
+ <aside class="sidebar">
+  <div class="sidebar-section">WORKSPACE</div>
+  <a class="side-link {{ 'active' if request.endpoint == 'dashboard' else '' }}" href="{{ url_for('dashboard') if current_role == 'tax' else url_for('cases') }}"><span class="side-icon">⌂</span> Dashboard</a>
+  <a class="side-link {{ 'active' if request.endpoint == 'new_case' else '' }}" href="{{ url_for('new_case') }}"><span class="side-icon">＋</span> New Request</a>
+  <a class="side-link {{ 'active' if request.endpoint in ['cases','case_detail'] else '' }}" href="{{ url_for('cases') }}"><span class="side-icon">▤</span> {{ 'My Requests' if current_role == 'initiator' else 'Case Register' }}</a>
+  {% if current_role == 'tax' %}
+  <a class="side-link {{ 'active' if request.endpoint == 'notifications' else '' }}" href="{{ url_for('notifications') }}"><span class="side-icon">♧</span> Notifications {% if unread_notification_count %}<span class="badge bg-danger ms-auto">{{ unread_notification_count }}</span>{% endif %}</a>
+  <a class="side-link {{ 'active' if request.endpoint in ['tax_update','case_history'] else '' }}" href="{{ url_for('cases') }}"><span class="side-icon">◎</span> TRA Tracking</a>
+  <a class="side-link {{ 'active' if request.endpoint == 'reconciliation_home' else '' }}" href="{{ url_for('reconciliation_home', type='VAT') }}"><span class="side-icon">↔</span> VAT &amp; WHT Reconciliation</a>
+  <a class="side-link {{ 'active' if request.endpoint and request.endpoint.startswith('cancellation_tracker') else '' }}" href="{{ url_for('cancellation_tracker') }}"><span class="side-icon">↻</span> Register Cancellations</a>
+  <a class="side-link" href="{{ url_for('dashboard') }}"><span class="side-icon">▥</span> Reports</a>
+  {% endif %}
+  <div class="sidebar-bottom"><div class="sidebar-mini-logo">C</div><strong>Stronger compliance.</strong><span>Clear records. Better control.</span><div class="brand-stripe"><i></i><i></i><i></i></div></div>
+ </aside>
+ {% endif %}
+ <main class="main-content {% if not current_role %}no-sidebar{% endif %}">
+  {% with messages = get_flashed_messages(with_categories=true) %}{% if messages %}{% for category, message in messages %}
+  <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">{{ message }}<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+  {% endfor %}{% endif %}{% endwith %}
+  {% block content %}{% endblock %}
+  <footer class="app-footer"><span><strong>CETTP v1.1</strong> <span class="footer-divider">|</span> Cancellation, Endorsement &amp; Tax Reconciliation Portal</span><span>Internal use only · Britam</span></footer>
+ </main>
 </div>
-<div class="panel mb-4"><div class="panel-heading"><div><h2>Tax Compliance Tools</h2><p>Access the tools available within your Tax Compliance Workspace.</p></div><span class="panel-badge blue-badge">WORKSPACE TOOLS</span></div><div class="row g-3"><div class="col-md-6 col-xl-4"><div class="card h-100 border-0 bg-light"><div class="card-body"><div class="fs-3 mb-2">▦</div><h5 class="fw-bold">Compliance Calendar</h5><p class="text-muted small">Monitor recurring tax returns, corporate tax instalments and one-time TRA assignments, objections, appeals and demand notices.</p><a class="btn btn-primary" href="{{ url_for('tax_calendar') }}">Open Compliance Calendar →</a></div></div></div>
-<div class="col-md-6 col-xl-4"><div class="card h-100 border-0 bg-light"><div class="card-body"><div class="fs-3 mb-2">▣</div><h5 class="fw-bold">VAT Control Account</h5><p class="text-muted small">Import ERP ledgers 330101 and 330107, classify VAT movements, record adjustments and payments, and reconcile the monthly account to TRA returns.</p><a class="btn btn-primary" href="{{ url_for('tax_vat_control') }}">Open VAT Control Account →</a></div></div></div></div></div>
-<div class="row g-4 mb-4"><div class="col-xl-7"><div class="panel chart-panel h-100"><div class="panel-heading"><div><h2>Workflow pipeline</h2><p>Cases by current workflow status</p></div><span class="panel-badge blue-badge">BY STATUS</span></div><canvas id="statusChart" height="210"></canvas></div></div><div class="col-xl-5"><div class="panel chart-panel h-100"><div class="panel-heading"><div><h2>Request mix</h2><p>Cancellations vs endorsements</p></div><span class="panel-badge purple-badge">BY TYPE</span></div><canvas id="typeChart" height="210"></canvas></div></div></div>
-<div class="panel mb-4"><div class="panel-heading"><div><h2>Overdue case monitoring</h2><p>Open cases pending for {{ overdue_days }} days or more, based on submission date.</p></div><span class="panel-badge {{ 'purple-badge' if overdue_count else 'blue-badge' }}">{{ overdue_count }} OVERDUE</span></div>
-{% if overdue_cases %}<div class="table-responsive"><table class="table table-sm table-hover align-middle cettp-table"><thead><tr><th>Case</th><th>Type</th><th>Policy</th><th>Status</th><th>Age</th><th>Next step</th></tr></thead><tbody>{% for c in overdue_cases %}<tr><td><a href="{{ url_for('case_detail', case_id=c.id) }}">{{ c.reference }}</a></td><td>{{ c.case_type }}</td><td>{{ c.policy_number }}</td><td>{{ c.workflow_status }}</td><td><span class="badge text-bg-warning">{{ ((now_utc - c.created_at).days if now_utc is defined else (overdue_days)) }}+ days</span></td><td><a class="btn btn-sm btn-outline-primary" href="{{ url_for('case_detail', case_id=c.id) }}">Review case</a></td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="alert alert-success mb-0 small">No overdue open cases. Your queue is up to date.</div>{% endif %}</div>
-<div class="panel"><div class="panel-heading"><div><h2>Recent cases</h2><p>Latest requests entered into CETTP</p></div><a class="panel-action" href="{{ url_for('cases') }}">View all cases →</a></div>{% include "_case_table.html" %}</div>
-{% endblock %}
-{% block scripts %}<script>
-const statusLabels={{ by_status|map(attribute=0)|list|tojson }}; const statusValues={{ by_status|map(attribute=1)|list|tojson }};
-const typeLabels={{ by_type|map(attribute=0)|list|tojson }}; const typeValues={{ by_type|map(attribute=1)|list|tojson }};
-Chart.defaults.font.family="'DM Sans', sans-serif"; Chart.defaults.color="#71809a";
-new Chart(document.getElementById('statusChart'),{type:'bar',data:{labels:statusLabels,datasets:[{label:'Cases',data:statusValues,backgroundColor:['#1769e8','#13a66b','#ff941f','#8250df','#18a9c8','#e65d78'],borderRadius:7,maxBarThickness:42}]},options:{responsive:true,plugins:{legend:{display:false}},scales:{x:{grid:{display:false}},y:{beginAtZero:true,ticks:{precision:0},grid:{color:'#edf1f7'}}}}});
-new Chart(document.getElementById('typeChart'),{type:'doughnut',data:{labels:typeLabels,datasets:[{data:typeValues,backgroundColor:['#1769e8','#13a66b','#ffab22','#8250df'],borderWidth:4,borderColor:'#fff',hoverOffset:8}]},options:{cutout:'67%',responsive:true,plugins:{legend:{position:'bottom',labels:{usePointStyle:true,boxWidth:8,padding:18}}}}});
-</script>{% endblock %}
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.datatables.net/2.1.8/js/dataTables.min.js"></script>
+<script src="https://cdn.datatables.net/2.1.8/js/dataTables.bootstrap5.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+{% block scripts %}{% endblock %}
+</body></html>
