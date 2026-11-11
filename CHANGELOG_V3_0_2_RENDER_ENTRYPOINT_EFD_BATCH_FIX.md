@@ -1,9 +1,7 @@
-# V2.6 – Month-specific compliance calendar and separate TRA/ZRA VAT
+# V3.0.2 — Render entry-point and EFD batch fix
 
-- Compliance Calendar now defaults to the current month and displays only deadlines due within that month.
-- Added previous/next month navigation. Month and year selections are retained when filtering by tax type or status.
-- Dashboard counters (due in 7 days, due today, overdue, payment pending and completed) are calculated only from obligations in the selected month.
-- Monthly VAT obligations are generated separately as TRA VAT Return and ZRA VAT Return, both due on the 20th.
-- Existing system-generated generic VAT Return records are upgraded in place to TRA VAT Return to avoid duplicate TRA VAT rows; ZRA VAT is added as a separate obligation.
-- Manual deadlines remain visible in the month in which their due date falls.
-- No new database tables or migrations are introduced.
+- Restored the valid root Flask `app.py` source.
+- Kept Jinja/HTML content in the `templates/` directory.
+- Added direct EFD batch-processing links to the EFD Portal sidebar and Quick links.
+- Retained the one-invoice-at-a-time staging workflow and ZIP batch download.
+- Retained the V3.0.1 VAT Control Account and existing CETTP features.

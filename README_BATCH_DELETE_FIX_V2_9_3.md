@@ -1,18 +1,25 @@
-# CETTP V2.9.2 – Safe Premium Register Batch Deletion
+# CETTP V2.9.3 – Premium Register batch-delete foreign-key fix
 
-## Batch deletion changes
-- Replaced the previous ORM/case-deletion sequence with a database-side delete scoped to the selected upload's unique `upload_batch` key.
-- The selected `RegisterUpload` and its `CancellationTrack` rows are deleted in one database transaction.
-- CETTP `Case` records are deliberately retained. A case may be shared by another Premium Register batch or contain audit logs, attachments and notifications; batch deletion must not delete formal case history.
-- If any database operation fails, the transaction is rolled back and no partial deletion is committed.
-- Full exception details are written to the Render application log. The user receives a timestamp reference to help locate the relevant log entry.
-- Updated the confirmation prompt and success message to explain that CETTP cases are retained.
-- Updated `/health` version to `2.9.2-safe-batch-delete`.
+## What this fixes
 
-## Database and deployment safety
-- No database schema migration is included.
-- No `DATABASE_URL`, database attachment, Render service, or production data is changed by this source package.
-- No FAR module or FAR navigation is included.
+The Premium Register batch-delete route now deletes only the `CancellationTrack` rows belonging to the selected `RegisterUpload.upload_batch`, then deletes that upload-history row, in one database transaction. It deliberately does **not** delete any `Case` records. This removes the `cancellation_track_case_id_fkey` references before the transaction completes while preserving CETTP cases, attachments, notifications and audit history.
 
-## Regression test
-`tests/test_batch_delete.py` tests deletion against an isolated in-memory SQLite database, including a case shared by two batches. Run with `python -m unittest discover -s tests` in an environment with the requirements installed.
+If any step fails, the transaction is rolled back and the exception is logged. No database schema migration is required.
+
+## Deploy to the existing Render service
+
+1. Back up the existing production database.
+2. Extract this ZIP. Its contents (`app.py`, `requirements.txt`, `Procfile`, `runtime.txt`, `templates/`, `static/`, etc.) are at the ZIP root.
+3. Replace the files in the **existing CETTP GitHub repository** with these extracted files. Do not create a new Render service or database.
+4. Keep the existing Render environment variables and database attachment unchanged. In particular, do not modify `DATABASE_URL` or `SECRET_KEY`.
+5. Keep the existing build command `pip install -r requirements.txt` and start command `gunicorn app:app`.
+6. Deploy the existing Render service.
+7. Open `/health`. It must report version `2.9.3-fk-batch-delete` before testing the delete operation.
+8. First test with a non-critical Premium Register upload. Confirm that its tracker rows and upload-history entry are removed, while linked CETTP Cases remain in the Case Register.
+
+## Important
+
+- CETTP-only package. No Fixed Asset Governance/FAR module or integration is included.
+- No database schema changes or data migration are required.
+- Do not delete any production batch until the new `/health` version is visible and the test succeeds.
+- A successful local syntax check is not a substitute for testing against the existing Render PostgreSQL database.

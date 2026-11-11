@@ -32,6 +32,7 @@
   <a class="side-link {{ 'active' if request.endpoint in ['tax_update','case_history'] else '' }}" href="{{ url_for('cases') }}"><span class="side-icon">◎</span> TRA Tracking</a>
   <a class="side-link {{ 'active' if request.endpoint == 'reconciliation_home' else '' }}" href="{{ url_for('reconciliation_home', type='VAT') }}"><span class="side-icon">↔</span> VAT &amp; WHT Reconciliation</a>
   <a class="side-link {{ 'active' if request.endpoint and request.endpoint.startswith('tax_vat_control') else '' }}" href="{{ url_for('tax_vat_control') }}"><span class="side-icon">▣</span> VAT Control Account</a>
+  <a class="side-link {{ 'active' if request.endpoint and request.endpoint.startswith('tax_investment_wht') else '' }}" href="{{ url_for('tax_investment_wht') }}"><span class="side-icon">▤</span> Investment WHT Credits</a>
   <a class="side-link {{ 'active' if request.endpoint and request.endpoint.startswith('cancellation_tracker') else '' }}" href="{{ url_for('cancellation_tracker') }}"><span class="side-icon">↻</span> Register Cancellations</a>
   <a class="side-link" href="{{ url_for('dashboard') }}"><span class="side-icon">▥</span> Reports</a>
   {% endif %}
@@ -43,7 +44,7 @@
   <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">{{ message }}<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
   {% endfor %}{% endif %}{% endwith %}
   {% block content %}{% endblock %}
-  <footer class="app-footer"><span><strong>CETTP V3.0.0</strong> <span class="footer-divider">|</span> Tax &amp; Compliance Portal</span><span>Internal use only · Britam</span></footer>
+  <footer class="app-footer"><span><strong>CETTP V3.1.0</strong> <span class="footer-divider">|</span> Tax &amp; Compliance Portal</span><span>Internal use only · Britam</span></footer>
  </main>
 </div>
 <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>

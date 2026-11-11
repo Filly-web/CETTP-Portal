@@ -1,17 +1,12 @@
-# V2.8 – EFD Batch Processing: Add One Invoice at a Time
+# EFD template fix — deployment notes
 
-## Changes
-- Replaced multi-file selection with a one-invoice-per-upload workflow.
-- Each upload captures its own TRA EFD verification code and receipt time immediately.
-- Uploaded invoices are staged in the configured EFD portal data directory and associated with the browser session's batch.
-- Added a review table showing each staged invoice and its EFD details.
-- Added per-invoice removal and clear-batch actions.
-- Added a final action to process all staged invoices and download one ZIP package with processed/failed folders and a CSV report.
-- Single-invoice `/process` route and single-invoice dashboard workflow remain unchanged.
-- Added a SQLite staging table to the existing EFD history database; no existing history rows are altered.
+The EFD portal's templates are explicitly namespaced to prevent collisions with CETTP templates of the same name.
 
-## Deployment notes
-- Keep `EFD_PORTAL_DATA_DIR` / `PORTAL_DATA_DIR` on persistent storage in Render. Staged files are held under `batch_staging/` until the batch is downloaded or cleared.
-- The existing `portal_history.db` will automatically create the new `batch_staging` table at startup.
-- No change to the main CETTP database or its `DATABASE_URL` is required.
-- Batch staging is session-associated. Use the same browser session while building a batch.
+- Dashboard: `templates/efd_portal/index.html`
+- Processing history: `templates/efd_portal/history.html`
+
+Render settings (assuming `app.py` defines `app` at repository root):
+- Build command: `pip install -r requirements.txt`
+- Start command: `gunicorn app:app`
+
+Do not change the existing database URL or create a new service for this fix. Back up existing databases before replacing files. After deployment, test Initiator login, Tax Compliance login, EFD invoice generation, EFD history, and Back to CETTP navigation.

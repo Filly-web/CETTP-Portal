@@ -1,18 +1,18 @@
-# V2.7 – EFD Batch Invoice Processing
+# EFD invoice generation – CSRF fix and CETTP return link
 
-## Added
-- Added a Batch Invoice Processing option to the existing EFD-to-Invoice dashboard.
-- Kept the existing Single Invoice Processing form and `/process` route intact.
-- Added multi-file `.docx` upload (up to 100 invoices per batch, subject to the existing 40 MB request limit).
-- Added per-file TRA verification code and receipt-time entry, generated against the selected file order.
-- Added pre-processing checks for missing details, duplicate sanitized filenames, duplicate verification codes, and invalid receipt times. These checks stop the batch before any invoice is processed.
-- Reused the existing EFD section and QR generation logic for both single and batch workflows.
-- Added ZIP download containing processed invoices, failed source documents (where applicable), and a CSV processing report.
-- Successful batch items are recorded in the existing invoice processing history.
+This package fixes the `Bad Request: The CSRF token is missing` error when processing an invoice in the EFD-to-Invoice Portal.
 
-## Notes
-- Batch processing does not alter the single-invoice workflow or its form fields.
-- The current implementation accepts Word `.docx` files only.
-- The report is CSV for compatibility with Excel; it includes filename, output filename, EFD code, receipt time, verification URL, result, and error.
-- The ZIP is generated for immediate download. Persistent batch archive/history and Excel schedule import are not included in this version.
-- Full Flask route/integration tests were not run in this environment because Flask and Flask-WTF are not installed. Python syntax compilation and ZIP integrity checks were run.
+## What changed
+1. The EFD invoice form now submits the CSRF token required by the application's global Flask-WTF CSRF protection.
+2. The EFD dashboard and processing history page now have a **Back to CETTP Portal** link.
+3. The EFD processing route remains CSRF-protected; security has not been disabled.
+
+## Deploy to the existing Render service
+1. Back up your current database and source repository.
+2. Extract this ZIP and copy its contents to the root of the existing `Filly-web/SmartCETTP` repository, preserving the `templates/` and `static/` folders.
+3. Commit and push the changes to the existing branch.
+4. Keep the existing Render service and environment variables, especially `DATABASE_URL`, `SECRET_KEY`, and `EFD_PORTAL_DATA_DIR`, unchanged.
+5. Redeploy the existing service. The build command should remain `pip install -r requirements.txt`; the start command should remain `gunicorn app:app` if `app.py` exposes `app`.
+6. After deployment, open `/efd-invoice/` afresh, upload a `.docx`, enter the TRA verification code and receipt time, then process the invoice. The form will include a fresh CSRF token from that page load.
+
+Do not add `@csrf.exempt` to the EFD processing route and do not disable global CSRF protection.
