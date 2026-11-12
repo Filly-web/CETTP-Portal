@@ -259,6 +259,18 @@ class TaxDeadlineAttachment(db.Model):
     deadline = db.relationship("TaxDeadline", backref=db.backref("attachments", lazy=True, cascade="all, delete-orphan"))
 
 
+class PortalEmailLog(db.Model):
+    __tablename__ = "portal_email_logs"
+    id = db.Column(db.Integer, primary_key=True)
+    event_type = db.Column(db.String(80), nullable=False, index=True)
+    recipient = db.Column(db.String(1000), nullable=False)
+    subject = db.Column(db.String(255), nullable=False)
+    status = db.Column(db.String(30), nullable=False, default="pending", index=True)
+    error_message = db.Column(db.String(2000))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    sent_at = db.Column(db.DateTime)
+
+
 class InvestmentWHTBatch(db.Model):
     __tablename__ = "investment_wht_batches"
     id = db.Column(db.Integer, primary_key=True)
@@ -499,6 +511,56 @@ def log_action(case, action, details=""):
     db.session.add(AuditLog(case_id=case.id, actor_role=session.get("role", "Unknown"),
                             actor_name=session.get("actor_name", ""), action=action, details=details))
 
+def _smtp_port():
+    try:
+        return int(os.environ.get("SMTP_PORT", "587"))
+    except (TypeError, ValueError):
+        return 587
+
+
+def _smtp_settings():
+    """Single environment-driven SMTP configuration for every CETTP notification."""
+    return {
+        "host": os.environ.get("SMTP_HOST", "smtp.mail.yahoo.com").strip(),
+        "port": _smtp_port(),
+        "username": os.environ.get("SMTP_USERNAME", "temporarytin2026@yahoo.com").strip(),
+        "password": os.environ.get("SMTP_PASSWORD", ""),
+        "sender": os.environ.get("SMTP_FROM", "temporarytin2026@yahoo.com").strip(),
+    }
+
+
+def _deliver_portal_email(recipients, subject, body):
+    """Deliver through the shared Yahoo SMTP service and persist every attempt."""
+    cfg = _smtp_settings()
+    event_type = "test" if subject.startswith("Britam CETTP – Email configuration test") else "notification"
+    log = PortalEmailLog(event_type=event_type, recipient=", ".join(recipients)[:1000] or "NOT_CONFIGURED",
+                         subject=subject[:255], status="pending")
+    db.session.add(log)
+    db.session.commit()
+    try:
+        if not recipients or not cfg["username"] or not cfg["password"] or not cfg["sender"]:
+            raise RuntimeError("Email is not configured. Set CETTP_TAX_COMPLIANCE_EMAIL and SMTP_USERNAME, SMTP_PASSWORD and SMTP_FROM in the Render environment.")
+        message = EmailMessage()
+        message["Subject"] = subject
+        message["From"] = cfg["sender"]
+        message["To"] = recipients[0]
+        if len(recipients) > 1: message["Cc"] = ", ".join(recipients[1:])
+        message.set_content(body)
+        with smtplib.SMTP(cfg["host"], cfg["port"], timeout=20) as server:
+            server.ehlo()
+            server.starttls(context=ssl.create_default_context())
+            server.ehlo()
+            server.login(cfg["username"], cfg["password"])
+            server.send_message(message)
+        log.status = "sent"; log.sent_at = datetime.utcnow(); log.error_message = None
+        db.session.commit()
+    except Exception as exc:
+        log.status = "not_configured" if isinstance(exc, RuntimeError) else "failed"
+        log.error_message = f"{type(exc).__name__}: {str(exc)[:1800]}"
+        db.session.commit()
+        raise
+
+
 def _notification_recipients():
     """Read shared mailbox recipient(s) from environment; allow semicolon/comma separated addresses."""
     raw = os.environ.get("CETTP_TAX_COMPLIANCE_EMAIL", "").strip()
@@ -540,22 +602,6 @@ def send_new_request_notification(case):
         logger.exception("Unable to create notification log for %s", case.reference)
         return False
 
-    host = os.environ.get("M365_SMTP_HOST", "smtp.office365.com").strip()
-    try:
-        port = int(os.environ.get("M365_SMTP_PORT", "587"))
-    except ValueError:
-        port = 587
-    username = os.environ.get("M365_SMTP_USERNAME", "").strip()
-    password = os.environ.get("M365_SMTP_PASSWORD", "")
-    sender = os.environ.get("M365_SMTP_FROM", username).strip()
-
-    if not username or not password or not sender:
-        log.status = "not_configured"
-        log.error_message = "Missing M365_SMTP_USERNAME, M365_SMTP_PASSWORD, or M365_SMTP_FROM environment variable."
-        db.session.commit()
-        logger.warning("Microsoft 365 SMTP settings incomplete for case %s", case.reference)
-        return False
-
     subject = f"CETTP – New {case.case_type} Request – {case.reference}"
     amount = f"TZS {case.adjustment_amount:,.2f}" if case.adjustment_amount is not None else "Not provided"
     effective_date = case.effective_date.strftime("%d %b %Y") if case.effective_date else "Not provided"
@@ -578,23 +624,9 @@ Open the request in CETTP after signing in: {os.environ.get('CETTP_BASE_URL', re
 
 This is an automated notification. Please do not reply to this message.
 """
-    message = EmailMessage()
-    message["Subject"] = subject
-    message["From"] = sender
-    message["To"] = recipients[0]
-    if len(recipients) > 1:
-        message["Cc"] = ", ".join(recipients[1:])
-    message.set_content(body)
-
     log.attempts = 1
     try:
-        context = ssl.create_default_context()
-        with smtplib.SMTP(host, port, timeout=20) as server:
-            server.ehlo()
-            server.starttls(context=context)
-            server.ehlo()
-            server.login(username, password)
-            server.send_message(message)
+        _deliver_portal_email(recipients, subject, body)
         log.status = "sent"
         log.sent_at = datetime.utcnow()
         log.error_message = None
@@ -1393,20 +1425,29 @@ def cancellation_tracker():
     if not _tax_required(): return redirect(url_for("home"))
     q = request.args.get("q", "").strip()
     status = request.args.get("status", "")
+    classification = request.args.get("classification", "").strip()
+    page = max(1, request.args.get("page", 1, type=int))
     period = request.args.get("period", "").strip()
     query = CancellationTrack.query
     if q: query = query.filter(or_(CancellationTrack.policy_number.ilike(f"%{q}%"), CancellationTrack.insured_name.ilike(f"%{q}%"), CancellationTrack.document_no.ilike(f"%{q}%")))
     if status: query = query.filter_by(tra_status=status)
+    if classification: query = query.filter_by(classification=classification)
     if period:
         batches = [u.upload_batch for u in RegisterUpload.query.filter_by(period=period).all()]
         if batches: query = query.filter(CancellationTrack.upload_batch.in_(batches))
         else: query = query.filter(CancellationTrack.id == -1)
-    rows = query.order_by(CancellationTrack.created_at.desc(), CancellationTrack.id.desc()).limit(5000).all()
+    total_filtered = query.count()
+    rows = query.order_by(CancellationTrack.created_at.desc(), CancellationTrack.id.desc()).offset((page-1)*10).limit(10).all()
     uploads = RegisterUpload.query.order_by(RegisterUpload.period.desc(), RegisterUpload.created_at.desc()).limit(120).all()
     periods = sorted({u.period for u in RegisterUpload.query.all()}, reverse=True)
+    counts = {label: CancellationTrack.query.filter_by(classification=label).count() for label in
+              ["Matched amount", "Different amount - review as endorsement", "Pure cancellation"]}
     return render_template("cancellation_tracker.html", rows=rows, q=q, status=status, period=period,
+                           classification=classification, page=page, pages=max(1,(total_filtered+9)//10),
+                           total_filtered=total_filtered, classification_counts=counts,
                            periods=periods, uploads=uploads, current_period=date.today().strftime("%Y-%m"), tra_statuses=CANCEL_TRA_STATUSES,
-                           total=len(rows), unreasoned=sum(1 for r in rows if not r.cancellation_reason), unsubmitted=sum(1 for r in rows if r.tra_status == "Not Submitted"))
+                           total=total_filtered, unreasoned=CancellationTrack.query.filter(CancellationTrack.cancellation_reason.is_(None)).count(),
+                           unsubmitted=CancellationTrack.query.filter_by(tra_status="Not Submitted").count())
 
 @app.route("/cancellation-tracker/upload", methods=["POST"])
 def cancellation_tracker_upload():
@@ -1558,13 +1599,17 @@ def cancellation_tracker_update(item_id):
     row = CancellationTrack.query.get_or_404(item_id)
     reason = request.form.get("cancellation_reason", "").strip()
     status = request.form.get("tra_status", "Not Submitted").strip()
+    classification = request.form.get("classification", row.classification).strip()
+    allowed_classifications = {"Matched amount", "Different amount - review as endorsement", "Pure cancellation"}
     tra_ref = request.form.get("tra_reference", "").strip()
-    if not reason:
-        flash("A cancellation / endorsement reason is required for tracking.", "danger")
-    elif status not in CANCEL_TRA_STATUSES:
+    if status not in CANCEL_TRA_STATUSES:
         flash("Invalid TRA status selected.", "danger")
+    elif classification not in allowed_classifications:
+        flash("Invalid classification selected.", "danger")
     else:
-        row.cancellation_reason = reason[:4000]; row.tra_status = status; row.tra_reference = tra_ref[:120] or None
+        row.classification = classification
+        row.cancellation_reason = reason[:4000] or None
+        row.tra_status = status; row.tra_reference = tra_ref[:120] or None
         if row.case_id:
             case = db.session.get(Case, row.case_id)
             if case:
@@ -1578,7 +1623,10 @@ def cancellation_tracker_update(item_id):
 def cancellation_tracker_import_to_cettp():
     if not _tax_required(): return redirect(url_for("home"))
     selected = request.form.getlist("item_ids")
+    selected_classification = request.form.get("import_classification", "").strip()
     query = CancellationTrack.query.filter(CancellationTrack.case_id.is_(None))
+    if selected_classification in {"Matched amount", "Different amount - review as endorsement", "Pure cancellation"}:
+        query = query.filter_by(classification=selected_classification)
     if selected:
         try: ids=[int(x) for x in selected]
         except ValueError: ids=[]
@@ -1941,27 +1989,8 @@ def _investment_wht_send_email(item, event_key, event_date, subject, body):
         existing.error_message = "Set CETTP_INVESTMENT_WHT_EMAIL or CETTP_TAX_COMPLIANCE_EMAIL."
         db.session.commit()
         return False
-    host = os.environ.get("M365_SMTP_HOST", "smtp.office365.com").strip()
-    try: port = int(os.environ.get("M365_SMTP_PORT", "587"))
-    except ValueError: port = 587
-    username = os.environ.get("M365_SMTP_USERNAME", "").strip()
-    password = os.environ.get("M365_SMTP_PASSWORD", "")
-    sender = os.environ.get("M365_SMTP_FROM", username).strip()
-    if not username or not password or not sender:
-        existing.status = "not_configured"
-        existing.error_message = "Microsoft 365 SMTP settings are incomplete."
-        db.session.commit()
-        return False
-    message = EmailMessage()
-    message["Subject"] = subject
-    message["From"] = sender
-    message["To"] = recipients[0]
-    if len(recipients) > 1: message["Cc"] = ", ".join(recipients[1:])
-    message.set_content(body)
     try:
-        with smtplib.SMTP(host, port, timeout=20) as server:
-            server.ehlo(); server.starttls(context=ssl.create_default_context()); server.ehlo()
-            server.login(username, password); server.send_message(message)
+        _deliver_portal_email(recipients, subject, body)
         existing.status = "sent"; existing.sent_at = datetime.utcnow(); existing.error_message = None
         db.session.commit()
         return True
@@ -1972,10 +2001,28 @@ def _investment_wht_send_email(item, event_key, event_date, subject, body):
         return False
 
 
+@app.route("/tax-email/test", methods=["POST"])
+def tax_email_test():
+    if not _tax_required(): return redirect(url_for("home"))
+    recipients = _notification_recipients()
+    try:
+        cfg = _smtp_settings()
+        _deliver_portal_email(recipients, "Britam CETTP – Email configuration test",
+            "This is a test notification from Britam CETTP. Central email delivery is configured successfully.")
+        logger.info("CETTP SMTP test email sent to %s via %s", ", ".join(recipients), cfg["host"])
+        flash("Test email sent successfully to the configured notification recipients.", "success")
+    except Exception as exc:
+        logger.exception("CETTP SMTP test failed")
+        flash(f"Email test failed: {type(exc).__name__}: {str(exc)[:300]}", "danger")
+    return redirect(request.referrer or url_for("tax_investment_wht"))
+
+
 @app.route("/tax-investment-wht")
 def tax_investment_wht():
     if not _tax_required(): return redirect(url_for("home"))
     rows = InvestmentWHT.query.order_by(InvestmentWHT.maturity_date.asc(), InvestmentWHT.bank_name.asc()).all()
+    batches = InvestmentWHTBatch.query.order_by(InvestmentWHTBatch.uploaded_at.desc()).all()
+    email_logs = PortalEmailLog.query.order_by(PortalEmailLog.created_at.desc()).limit(50).all()
     today = _investment_local_today()
     upcoming = [x for x in rows if today <= x.maturity_date <= today + timedelta(days=30)]
     matured_outstanding = [x for x in rows if x.maturity_date < today and x.outstanding_wht > 0]
@@ -1984,7 +2031,7 @@ def tax_investment_wht():
     total_outstanding = sum((x.outstanding_wht for x in rows), Decimal("0.00"))
     return render_template("tax_investment_wht.html", investments=rows, upcoming_count=len(upcoming),
         matured_outstanding_count=len(matured_outstanding), total_expected=total_expected,
-        total_actual=total_actual, total_outstanding=total_outstanding, today=today)
+        total_actual=total_actual, total_outstanding=total_outstanding, today=today, batches=batches, email_logs=email_logs)
 
 
 @app.route("/tax-investment-wht/template.xlsx")
@@ -2091,6 +2138,70 @@ def tax_investment_wht_add():
         db.session.add(item); db.session.commit(); flash("Investment registered and expected WHT calculated.", "success")
     except Exception as exc:
         db.session.rollback(); flash(f"Investment was not saved: {exc}", "danger")
+    return redirect(url_for("tax_investment_wht"))
+
+
+@app.route("/tax-investment-wht/<int:investment_id>/edit", methods=["POST"])
+def tax_investment_wht_edit(investment_id):
+    if not _tax_required(): return redirect(url_for("home"))
+    item = InvestmentWHT.query.get_or_404(investment_id)
+    try:
+        bank = request.form.get("bank_name", "").strip()
+        tin = request.form.get("bank_tin", "").strip()
+        principal = _amount(request.form.get("amount_invested"))
+        rate = _amount(request.form.get("annual_rate"))
+        nature = request.form.get("nature", "Fixed Deposit").strip()
+        start_date = datetime.strptime(request.form.get("start_date", ""), "%Y-%m-%d").date()
+        maturity_date = datetime.strptime(request.form.get("maturity_date", ""), "%Y-%m-%d").date()
+        confirmed_raw = request.form.get("confirmed_interest", "").strip()
+        confirmed = _amount(confirmed_raw) if confirmed_raw else None
+        if not bank or not tin: raise ValueError("Bank Name and TIN Number are required.")
+        if principal <= 0 or rate < 0 or rate > 100: raise ValueError("Enter a positive principal and a valid annual rate.")
+        _, calculated, expected = _investment_wht_calculation(principal, rate, start_date, maturity_date, confirmed)
+        key = _investment_duplicate_key(tin, principal, nature, start_date, maturity_date)
+        duplicate = InvestmentWHT.query.filter(InvestmentWHT.duplicate_key == key, InvestmentWHT.id != item.id).first()
+        if duplicate: raise ValueError("Another investment already has the same duplicate key.")
+        item.bank_name=bank[:180]; item.bank_tin=tin[:40]; item.amount_invested=principal
+        item.nature=nature[:80]; item.start_date=start_date; item.maturity_date=maturity_date
+        item.annual_rate=rate; item.confirmed_interest=confirmed
+        item.calculated_interest=calculated; item.expected_wht=expected; item.duplicate_key=key
+        db.session.commit()
+        flash("Investment registration updated successfully.", "success")
+    except Exception as exc:
+        db.session.rollback(); flash(f"Investment update was not saved: {exc}", "danger")
+    return redirect(url_for("tax_investment_wht"))
+
+
+@app.route("/tax-investment-wht/<int:investment_id>/delete", methods=["POST"])
+def tax_investment_wht_delete(investment_id):
+    if not _tax_required(): return redirect(url_for("home"))
+    item = InvestmentWHT.query.get_or_404(investment_id)
+    try:
+        # Explicitly remove reminder logs first; preserve the batch and all other investments.
+        InvestmentWHTEmailLog.query.filter_by(investment_id=item.id).delete(synchronize_session=False)
+        db.session.delete(item); db.session.commit()
+        flash("Investment and its associated reminder email logs were deleted. Other registrations were retained.", "success")
+    except Exception:
+        db.session.rollback(); logger.exception("Investment deletion failed: %s", investment_id)
+        flash("Investment deletion failed; no changes were saved.", "danger")
+    return redirect(url_for("tax_investment_wht"))
+
+
+@app.route("/tax-investment-wht/batch/<int:batch_id>/delete", methods=["POST"])
+def tax_investment_wht_delete_batch(batch_id):
+    if not _tax_required(): return redirect(url_for("home"))
+    batch = InvestmentWHTBatch.query.get_or_404(batch_id)
+    batch_filename = batch.filename
+    try:
+        ids = [x[0] for x in db.session.query(InvestmentWHT.id).filter_by(batch_id=batch.id).all()]
+        if ids:
+            InvestmentWHTEmailLog.query.filter(InvestmentWHTEmailLog.investment_id.in_(ids)).delete(synchronize_session=False)
+            InvestmentWHT.query.filter(InvestmentWHT.id.in_(ids)).delete(synchronize_session=False)
+        db.session.delete(batch); db.session.commit()
+        flash(f"Imported batch '{batch_filename}' and {len(ids)} associated investment(s) were deleted. Manual registrations and other batches were preserved.", "success")
+    except Exception:
+        db.session.rollback(); logger.exception("Investment batch deletion failed: %s", batch_id)
+        flash("Batch deletion failed; no changes were saved.", "danger")
     return redirect(url_for("tax_investment_wht"))
 
 
