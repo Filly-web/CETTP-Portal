@@ -84,11 +84,11 @@ Configure these environment variables in the deployment environment (for example
 | Variable | Purpose |
 |---|---|
 | `CETTP_TAX_COMPLIANCE_EMAIL` | Optional approved recipient(s). No recipient is preconfigured. Multiple recipients may be separated by commas or semicolons. |
-| `SMTP_HOST` | Central SMTP host; V3.2.0 defaults to `smtp.mail.yahoo.com`. |
-| `SMTP_PORT` | SMTP submission port; V3.2.0 defaults to `587` (STARTTLS). |
-| `SMTP_USERNAME` | Yahoo sender/login; V3.2.0 defaults to `temporarytin2026@yahoo.com`. |
-| `SMTP_PASSWORD` | Yahoo-generated App Password; store only as a Render environment secret. |
-| `SMTP_FROM` | Sender address; V3.2.0 defaults to `temporarytin2026@yahoo.com`. |
+| `M365_SMTP_HOST` | Optional; defaults to `smtp.office365.com`. |
+| `M365_SMTP_PORT` | Optional; defaults to `587` (STARTTLS). |
+| `M365_SMTP_USERNAME` | Microsoft 365 mailbox username approved for SMTP submission. |
+| `M365_SMTP_PASSWORD` | Secret credential/app password supplied by Britam IT, if permitted by policy. Store only as an environment secret. |
+| `M365_SMTP_FROM` | Approved sender address; defaults to `M365_SMTP_USERNAME`. |
 | `CETTP_BASE_URL` | Public CETTP base URL used to build the link in the email, e.g. `https://your-approved-cettp-host`. |
 
 **Microsoft 365 / IT approval required:** This implementation uses authenticated SMTP submission with STARTTLS. Britam IT must confirm that SMTP AUTH is permitted for the sender mailbox and tenant, provide the approved credential method, and approve the sender/recipient configuration. If SMTP AUTH is disabled or organizational policy requires OAuth/Graph, this SMTP transport must be replaced with the approved Microsoft Graph mail-sending method; do not weaken tenant security to make SMTP work.
@@ -132,4 +132,3 @@ See `README_V3_0_0_VAT_CONTROL_ACCOUNT.md` for user instructions and `CHANGELOG_
 ## Investment WHT Credits (V3.1.0)
 
 The Tax Compliance Workspace includes an Investment WHT Credits register for bank deposits and other investments. It supports individual registration, Excel batch upload, actual-days/365 expected interest calculations with a bank-confirmed override, 10% expected WHT, maturity-based outstanding WHT receivable, actual WHT reconciliation, TRA certificate attachments, and scheduled email reminders. See `README_INVESTMENT_WHT_CREDITS.md` and `CHANGELOG_V3_1_0_INVESTMENT_WHT_CREDITS.md` for user instructions and reminder deployment configuration.
-\n\n## V3.2.0 release\n\nSee `CHANGELOG_V3_2_0_CONFIRMED_SCOPE.md` for the delivered Investment WHT, Yahoo SMTP, Cancellation Tracker, and safe Render deployment changes. Configure the Yahoo App Password only as the `SMTP_PASSWORD` secret in the existing Render service.\n
