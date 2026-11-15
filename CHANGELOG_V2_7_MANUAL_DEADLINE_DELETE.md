@@ -1,7 +1,8 @@
-# V2.7 – Manual Tax Deadline Deletion
+# CETTP v2.1 — EFD-to-Invoice Portal Integration
 
-- Added a Delete action beside Edit for manually created tax compliance deadlines.
-- Deletion requires a confirmation prompt and a CSRF-protected POST request.
-- System-generated recurring statutory deadlines are not offered for deletion and are protected by the server route.
-- Deleting a manual deadline also removes its linked evidence and detail audit entries through the existing ORM cascade relationships.
-- No database schema changes or migration are required.
+- Added EFD-to-Invoice as a third option on the pre-login service selection page.
+- Mounted the existing EFD invoice processing utility under `/efd-invoice/` using a Flask Blueprint to avoid route collisions with CETTP.
+- Preserved Initiator and Tax Compliance workflows and case-edit/resubmission features.
+- Added `python-docx` and `qrcode[pil]` dependencies.
+- EFD processing history remains in its own SQLite database, configurable through `EFD_PORTAL_DATA_DIR`; configure persistent storage for durable history on Render.
+- EFD utility currently has no role login; access should be restricted to approved internal users.
