@@ -1,16 +1,16 @@
-# V1.6 — Initiator workspace and tracking
+# V1.1 enhancement: Premium Register cancellation tracker
 
-- Adds a dedicated Initiator dashboard with personal request counters and recent cases.
-- Adds a private My Updates inbox with read/unread status and direct links to the related case.
-- Creates Initiator notifications when Tax Compliance changes workflow status or adds review notes, including returned-for-clarification and final outcomes.
-- Scopes Initiator case listing and exports to records whose Initiator identity matches the email used for the current session.
-- Enforces case-level ownership checks for case detail, attachment upload and attachment download routes.
-- Adds date-range and overdue filters to the case list; Initiators can filter returned and overdue cases using the existing status/filter controls.
-- Tax Compliance retains the broader case register and approval/status controls.
+This package is based on the unchanged V1.1 CETTP application. It adds a separate Tax Compliance sidebar option for Premium Register cancellation and endorsement tracking.
 
-## Notes
+## Added
+- Import standard unprotected `.xlsx`/`.xlsm` or `.csv` AIMS Premium Register files by detecting the `POLICY NO` and `GROSS PREMIUM` columns.
+- Pair negative and positive premium transactions by policy number; exact absolute amount matches are classified as `Matched amount`; a different positive amount is classified as a potential endorsement requiring review; no positive transaction on the policy is classified as `Pure cancellation`.
+- Record a mandatory cancellation/endorsement reason, TRA status and TRA reference per negative premium record.
+- Import selected or all unimported detected records into the existing CETTP Case workflow, retaining the detected amounts and classification in the tracker.
+- Export the cancellation tracker to Excel with reasons, TRA statuses/references and linked case references.
+- Download a CSV header template matching the AIMS Premium Register headings.
 
-- Initiator access remains email-only for the pilot and does not verify email ownership. Do not treat the entered email as authenticated identity in production.
-- The existing database initialization (`db.create_all()`) creates the new `initiator_notification` table for new deployments. For production databases, apply an approved migration/initialization process and back up first.
-- Draft saving and editing are not yet implemented as a persisted workflow; the dashboard displays a Drafts metric for compatibility but this feature should be completed before presenting drafts as available to users.
-- No WHT reconciliation module was added as part of this change.
+## Controls and limitations
+- Pairing is a suggestion and must be checked against source documents before submission to TRA.
+- The imported source file previously supplied could not be read as a standard XLSX, so use an unprotected Excel workbook or CSV export.
+- This enhancement does not change the V1.1 database URI handling, PostgreSQL persistence behavior, Render configuration or `/health` behavior.

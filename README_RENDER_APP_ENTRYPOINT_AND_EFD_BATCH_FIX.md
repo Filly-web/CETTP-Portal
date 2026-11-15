@@ -1,16 +1,18 @@
-# CETTP V3.0.2 — Render entry-point and EFD batch navigation fix
+# EFD invoice generation – CSRF fix and CETTP return link
 
-## Corrections
+This package fixes the `Bad Request: The CSRF token is missing` error when processing an invoice in the EFD-to-Invoice Portal.
 
-1. Restores the valid Flask application source in repository-root `app.py`. `app.py` must contain Python code, not Jinja/HTML template content.
-2. Restores visible access to the existing EFD batch-processing feature from the EFD Portal dashboard: a sidebar link and a Quick links entry.
-3. Retains the existing batch workflow: upload one `.docx` invoice per submission, enter its TRA verification code and receipt time, review/remove staged invoices, then process the staged invoices and download one ZIP package.
-4. Retains the V3.0.1 VAT Control Account and other CETTP modules.
+## What changed
+1. The EFD invoice form now submits the CSRF token required by the application's global Flask-WTF CSRF protection.
+2. The EFD dashboard and processing history page now have a **Back to CETTP Portal** link.
+3. The EFD processing route remains CSRF-protected; security has not been disabled.
 
-## Render deployment
+## Deploy to the existing Render service
+1. Back up your current database and source repository.
+2. Extract this ZIP and copy its contents to the root of the existing `Filly-web/SmartCETTP` repository, preserving the `templates/` and `static/` folders.
+3. Commit and push the changes to the existing branch.
+4. Keep the existing Render service and environment variables, especially `DATABASE_URL`, `SECRET_KEY`, and `EFD_PORTAL_DATA_DIR`, unchanged.
+5. Redeploy the existing service. The build command should remain `pip install -r requirements.txt`; the start command should remain `gunicorn app:app` if `app.py` exposes `app`.
+6. After deployment, open `/efd-invoice/` afresh, upload a `.docx`, enter the TRA verification code and receipt time, then process the invoice. The form will include a fresh CSRF token from that page load.
 
-Keep `app.py`, `efd_portal.py`, `requirements.txt`, `Procfile`, `templates/`, and `static/` at the repository root. The included Procfile is `web: gunicorn app:app`. Deploy to the same repository/branch connected to the existing Render service. Do not recreate the service or change `DATABASE_URL`, `SECRET_KEY`, or the database.
-
-## Verification scope
-
-All Python files passed static syntax parsing; the root application entry point, batch route, dashboard links, required templates, requirements file, and ZIP integrity were checked. This is not a live Render deployment test.
+Do not add `@csrf.exempt` to the EFD processing route and do not disable global CSRF protection.

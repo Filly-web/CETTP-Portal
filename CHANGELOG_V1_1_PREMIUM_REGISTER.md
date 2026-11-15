@@ -1,16 +1,12 @@
-# V1.1 enhancement: Premium Register cancellation tracker
+# CETTP V1.1 — New Request Email Notifications
 
-This package is based on the unchanged V1.1 CETTP application. It adds a separate Tax Compliance sidebar option for Premium Register cancellation and endorsement tracking.
+- Added an `EmailNotificationLog` database table for sent, failed and not-configured notification attempts.
+- New Initiator-submitted cancellation and endorsement cases trigger one email attempt to the shared Tax Compliance mailbox after the case is committed.
+- Added duplicate-send prevention with a unique case/event key.
+- Added Microsoft 365 SMTP submission via STARTTLS, configured only through environment variables.
+- Email failures do not undo the request; status and bounded error details are recorded for follow-up.
+- Added configurable public CETTP URL for the case link in the email.
+- Premium Register batch imports do not trigger this new-Initiator-request notification.
+- No WHT reconciliation functionality was added or changed as part of this enhancement.
 
-## Added
-- Import standard unprotected `.xlsx`/`.xlsm` or `.csv` AIMS Premium Register files by detecting the `POLICY NO` and `GROSS PREMIUM` columns.
-- Pair negative and positive premium transactions by policy number; exact absolute amount matches are classified as `Matched amount`; a different positive amount is classified as a potential endorsement requiring review; no positive transaction on the policy is classified as `Pure cancellation`.
-- Record a mandatory cancellation/endorsement reason, TRA status and TRA reference per negative premium record.
-- Import selected or all unimported detected records into the existing CETTP Case workflow, retaining the detected amounts and classification in the tracker.
-- Export the cancellation tracker to Excel with reasons, TRA statuses/references and linked case references.
-- Download a CSV header template matching the AIMS Premium Register headings.
-
-## Controls and limitations
-- Pairing is a suggestion and must be checked against source documents before submission to TRA.
-- The imported source file previously supplied could not be read as a standard XLSX, so use an unprotected Excel workbook or CSV export.
-- This enhancement does not change the V1.1 database URI handling, PostgreSQL persistence behavior, Render configuration or `/health` behavior.
+Microsoft 365 SMTP AUTH availability and credential method must be confirmed by Britam IT. If SMTP AUTH is not allowed, integrate the approved Microsoft Graph method instead.

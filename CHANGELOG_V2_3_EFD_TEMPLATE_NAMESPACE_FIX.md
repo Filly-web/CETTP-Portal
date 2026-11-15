@@ -1,13 +1,9 @@
-# CETTP V2.3 — EFD Template Namespace Fix
+# CETTP V2.0 – Case Editing and Returned Request Resubmission
 
-## Issue
-The EFD history route rendered `history.html`, which could resolve to CETTP's case-history template. That template expects a `case` variable and caused `jinja2.exceptions.UndefinedError: 'case' is undefined`.
-
-## Fix
-- EFD history explicitly renders `efd_portal/history.html`.
-- EFD dashboard explicitly renders `efd_portal/index.html`.
-- The EFD processing history query and its records are unchanged.
-- CSRF protection and the Back to CETTP Portal navigation remain in place.
-
-## Deployment
-Update the existing repository/service with the ZIP contents. Keep the existing Render service, database URL, and environment variables unchanged. Back up existing data first. Verify the EFD dashboard, history, invoice generation, Initiator login, and Tax Compliance login after deployment.
+- Tax Compliance can edit submitted case details, including policy number, customer/insured name and TIN, request type, effective date, reason, product, branch, underwriter, invoice number and financial amounts.
+- Initiators can edit only cases in `Returned for Clarification` and resubmit them to `Under Tax Review`.
+- Initiator ownership checks remain enforced; an initiator cannot edit another initiator's case.
+- Case changes are recorded in the existing audit history.
+- Resubmission creates an in-app notification for Tax Compliance. Tax Compliance edits trigger an initiator notification.
+- Existing attachments remain attached. Editing does not require uploading the cancelled invoice/EFD again, but additional supporting documents can be added.
+- No database schema change is required; the existing case fields and notification tables are reused.
