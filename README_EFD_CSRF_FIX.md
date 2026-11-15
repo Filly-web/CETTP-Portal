@@ -1,13 +1,18 @@
-# CETTP V3.2.0 – Complete Enhancement
+# EFD invoice generation – CSRF fix and CETTP return link
 
-## Included
-- Investment WHT Credits: individual investment edit/delete, imported batch deletion, dependent reminder-log cleanup, duplicate checking and interest/WHT recalculation.
-- VAT Control Account: selected import batch deletion with scoped removal of associated transaction rows and period balances; audit event retained.
-- EFD-to-Invoice: processed invoice history and processed DOCX files stored in the shared CETTP SQLAlchemy database; optional invoice reference, policy and customer fields; invoice-reference linking to cancellation/endorsement cases; case detail and EFD history download links.
-- Central Yahoo SMTP configuration used by existing case submission and investment reminder email paths.
+This package fixes the `Bad Request: The CSRF token is missing` error when processing an invoice in the EFD-to-Invoice Portal.
 
-## Deployment
-Preserve the existing Render service, PostgreSQL database, `DATABASE_URL`, and `SECRET_KEY`. Set the Yahoo App Password only in Render as `MAIL_PASSWORD`. See `README_DEPLOY_EXISTING_RENDER.md`.
+## What changed
+1. The EFD invoice form now submits the CSRF token required by the application's global Flask-WTF CSRF protection.
+2. The EFD dashboard and processing history page now have a **Back to CETTP Portal** link.
+3. The EFD processing route remains CSRF-protected; security has not been disabled.
 
-## Limitations / validation
-Yahoo SMTP delivery requires live Render credentials and recipients and has not been tested from this build environment. EFD legacy SQLite history rows are not automatically imported as processed document binaries; newly processed EFD records are persisted centrally. Existing batch staging remains local draft staging until processing completes; successfully processed invoices are saved to PostgreSQL.
+## Deploy to the existing Render service
+1. Back up your current database and source repository.
+2. Extract this ZIP and copy its contents to the root of the existing `Filly-web/SmartCETTP` repository, preserving the `templates/` and `static/` folders.
+3. Commit and push the changes to the existing branch.
+4. Keep the existing Render service and environment variables, especially `DATABASE_URL`, `SECRET_KEY`, and `EFD_PORTAL_DATA_DIR`, unchanged.
+5. Redeploy the existing service. The build command should remain `pip install -r requirements.txt`; the start command should remain `gunicorn app:app` if `app.py` exposes `app`.
+6. After deployment, open `/efd-invoice/` afresh, upload a `.docx`, enter the TRA verification code and receipt time, then process the invoice. The form will include a fresh CSRF token from that page load.
+
+Do not add `@csrf.exempt` to the EFD processing route and do not disable global CSRF protection.

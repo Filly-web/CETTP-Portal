@@ -1,18 +1,16 @@
-# CETTP V3.0.1 – Build verification
+# V1.1 Monthly Premium Register Tracking Enhancement
 
-## Checks completed
-- `app.py` and `efd_portal.py` passed Python syntax compilation.
-- The `base.html`, `dashboard.html` and `tax_vat_control.html` Jinja templates compiled successfully.
-- New VAT Control Account template links were checked against the route function names in `app.py`.
-- The VAT ledger parser was executed against the supplied `330101.xlsx` sample workbook without changing or including the workbook in this deployment package.
-- The parser detected 215 transaction rows in sheet 330101 and 823 transaction rows in sheet 330107, across 12 monthly reporting periods and 24 account-period opening balance records.
-- For months where the ERP supplied numeric closing balances, opening balance plus monthly movement rolled forward to the reported closing balance within TZS 1.00 rounding tolerance.
-- Supplier payment descriptions in 330107 were not automatically classified as VAT payments; the 330107 entries were treated as input VAT unless their description identified another VAT category.
+- Added a required reconciliation-month selector to Premium Register uploads.
+- Added a persistent monthly upload history with source file, transaction counts, negative-premium count, exact-match count, different-amount count, pure-cancellation count, uploader and upload timestamp.
+- Each upload receives its own batch identifier. Uploading a month again creates a separate retained batch; it does not overwrite earlier tracking records.
+- Added month filtering and per-month Excel exports, with an all-month export option.
+- Excel exports include the reporting month, cancellation/endorsement reason, TRA status/reference, and CETTP case reference.
+- Implemented the history in a new database table so the existing V1.1 `CancellationTrack` and `Case` tables are not changed. `db.create_all()` creates the new table at application startup.
+- No V1.2 persistence hardening changes were intentionally added.
 
-## Not completed
-- A live Flask application/database integration test was not run in this build environment because Flask and Flask-SQLAlchemy were not installed and package installation was unavailable.
-- No connection was made to the production Render service or production database.
-- No production data or environment settings were changed.
-
-## Deployment verification required
-After deployment to the existing Render service, confirm `/health` returns `3.0.1-vat-control`, then upload a test copy of the ERP workbook and check the monthly control account before importing a production ledger batch.
+## Duplicate cancellation / endorsement controls
+- Added duplicate-action detection across initiator-created CETTP cases and Premium Register tracking records.
+- Exact duplicate actions are identified using normalized policy number plus action type, effective/transaction date, document/invoice number, and absolute adjustment amount.
+- Initiator submissions are stopped with a clear alert when an exact duplicate already exists; related actions on the same policy are flagged for review without blocking legitimate separate endorsements.
+- Premium Register uploads skip exact duplicates already in CETTP, in prior register uploads, or repeated within the same upload, and display a summary alert.
+- Import-to-CETTP avoids creating a second case for an action already initiated and links the tracker row to the existing CETTP case when available.

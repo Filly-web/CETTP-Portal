@@ -1,82 +1,40 @@
-# CETTP V3.0.0 – Existing Render service deployment
+# Britam CETTP V3.0.1 – VAT Control Account
 
-This package is arranged with the application files at the ZIP root. In particular, `requirements.txt` contains **only pip package requirements**. Do not copy the text of this README or any changelog into `requirements.txt`.
+This release extends the existing Britam CETTP Tax Compliance Workspace with a VAT Control Account. It preserves the existing cancellation/endorsement case workflow, Premium Register tracking, EFD-to-Invoice utility, TRA tracking and Compliance Calendar.
 
-## Deploy to the existing Render service
+## VAT Control Account access
+1. Sign in through the existing **Tax Compliance Workspace**.
+2. Open **VAT Control Account** from the sidebar or Tax Compliance dashboard.
+3. Upload the ERP `.xlsx` workbook containing both sheets `330101` (Output VAT) and `330107` (VAT Recoverable).
+4. Select an upload batch and reporting month to view the monthly VAT account.
+5. Review each transaction's suggested classification. Correct any incorrect category and add a review note.
+6. Record any adjustments, imported-service VAT, import VAT or VAT payments not already included in the two ledgers. Attach supporting evidence where available.
+7. Record submitted TRA VAT return figures and upload the return evidence to compare the declared net VAT with the ledger-derived movement.
+8. Use **Download final VAT account (Excel)** to export the monthly control account and supporting transaction schedules.
 
-1. Back up the current production database before deploying.
-2. Extract this ZIP. The files `app.py`, `requirements.txt`, `Procfile`, `runtime.txt`, `templates/` and `static/` should be directly inside the repository root (not inside another nested `CETTP_Integrated/` directory).
-3. Update the existing GitHub repository with these files. Do not create a new Render service or a new database.
-4. In the existing Render Web Service, keep the current database attachment and environment variables unchanged. In particular, do not change `DATABASE_URL` or `SECRET_KEY`.
-5. Confirm the existing service's Root Directory is blank (repository root). Use:
-   - Build command: `pip install -r requirements.txt`
-   - Start command: `gunicorn app:app`
-6. Deploy the existing service. Check `/health` and review Render Logs after deployment.
-7. Sign in as an Initiator, create one test request with the mandatory cancelled invoice/EFD attachment, and confirm that it appears in the Tax Compliance Case Register and Notifications.
+## Supported ERP workbook layout
+The importer is designed against the supplied ERP Detailed Account Analysis workbook. It requires two worksheets named exactly `330101` and `330107`. It reads the report's monthly sections and the `Accounted Amount` in TZS. It uses the monthly `Period` label for the VAT period, not just the GL date.
 
-## What this release addresses
+## VAT movement sign convention
+The sample ERP export records output VAT credit balances in 330101 as negative amounts and recoverable VAT debit balances in 330107 as positive amounts. The control account therefore converts each signed accounted movement into its VAT liability effect by reversing the sign:
+- A credit posting to output VAT increases the VAT payable position.
+- A debit posting to recoverable VAT reduces the VAT payable position.
+- VAT payments posted as debits to 330101 reduce the VAT payable position.
 
-- Initiator email is used as the Initiator username; no OTP or password is requested for Initiator entry.
-- Initiator name is taken from the login email and is not required as an editable form field.
-- Form validation errors are displayed and written to the application log rather than silently redisplaying the form.
-- Case, attachment, audit entry and Tax Compliance in-app notification are committed in one database transaction. On a database error, the transaction is rolled back and the exception is logged.
-- Tax Compliance login controls are unchanged.
-- Existing `DATABASE_URL` configuration is unchanged. No database or Render service is defined in this package.
+The account starts with the combined opening balance of both ledgers, then adds the classified ERP movements and manual movements. It shows the combined ERP closing balance and reconciliation variance when both ledger closing figures are available.
 
-## Requirements file
+## Review and statutory control
+Automatic classifications are suggestions only. The supplied sample contains manual journals whose descriptions do not clearly identify the VAT nature; those are marked for review. Input tax should only be treated as claimable after review of the relevant tax invoice, business purpose, applicable restrictions and tax period. The module provides registers for increasing/decreasing adjustments, imported services, import VAT and payments, but does not replace professional tax review or the VAT return filing process.
 
-`requirements.txt` is a plain UTF-8 list of Python dependencies, one per line. Keep explanatory notes, README text and changelogs out of this file.
+Avoid double counting: if a VAT payment or adjustment is already posted in the imported ERP ledgers, do not enter the same item again as a manual movement.
 
-## Important
+## Deployment to the existing Render service
+- Deploy this package to the existing CETTP repository/service.
+- Keep the existing Render service and database attachment.
+- Keep the existing `DATABASE_URL`, `SECRET_KEY`, `TAX_ACCESS_CODE` and other environment settings unchanged.
+- Build command: `pip install -r requirements.txt`
+- Start command: `gunicorn app:app`
+- The existing `db.create_all()` startup call creates the new VAT tables without modifying existing CETTP tables. Back up the production database before deployment as standard operational practice.
+- After deployment, check `/health`; the version should report `3.0.1-vat-control`.
 
-The Initiator email-only login does not verify ownership of the email address. Use it only within a controlled pilot environment. A successful code build does not by itself prove that the production database is reachable; verify one test submission in the deployed service.
-
-## V2.9.2 Premium Register batch deletion
-- This release deletes only the selected upload history row and its tracker rows.
-- Linked CETTP cases are retained to protect case workflow and audit history, including cases shared by more than one register batch.
-- A failed operation is rolled back. Check Render Logs for `Premium Register batch deletion failed` and use the timestamp reference displayed in the portal.
-- After deployment, confirm `/health` reports `3.0.0-vat-control`, then test deletion using a non-critical test upload before deleting a live batch.
-
-
-## V2.9.3 foreign-key batch deletion fix
-- Deletes only the selected batch tracker rows before deleting its upload-history row.
-- Does not delete linked Case records.
-- Includes an explicit flush after child-row deletion and rolls back on failure.
-
-
-## V3.0.0 VAT Control Account
-See `README_V3_0_0_VAT_CONTROL_ACCOUNT.md` for the VAT Control Account workflow and `CHANGELOG_V3_0_0_VAT_CONTROL_ACCOUNT.md` for its implementation details. The module adds new tables only; it does not change the existing database URL or Render service configuration.
-
-
-## CETTP V3.2.0 central email configuration
-
-Keep the existing Render Web Service, PostgreSQL database, `DATABASE_URL`, and `SECRET_KEY`.
-Add these environment variables to the existing service (do not replace existing secrets):
-
-- `MAIL_SERVER=smtp.mail.yahoo.com`
-- `MAIL_PORT=587`
-- `MAIL_USE_TLS=true`
-- `MAIL_USERNAME=temporarytin2026@yahoo.com`
-- `MAIL_PASSWORD` = Yahoo App Password (enter only in Render; never commit it)
-- `MAIL_DEFAULT_SENDER=temporarytin2026@yahoo.com`
-- `CETTP_TAX_COMPLIANCE_EMAIL` = approved recipient(s)
-- `CETTP_INVESTMENT_WHT_EMAIL` = approved investment reminder recipient(s)
-- `INVESTMENT_WHT_CRON_TOKEN` = long random token for scheduled reminder requests
-
-Configure a daily Render Cron Job to POST to `/tax-investment-wht/reminders/run` with header
-`X-CETTP-CRON-TOKEN: <same token>`. SMTP delivery cannot be verified until valid credentials
-and recipient addresses are configured in Render.
-
-## V3.2.0 data preservation notes
-
-- New EFD-to-Invoice processing records and processed DOCX files are stored in the existing
-  CETTP SQLAlchemy database, with optional invoice reference, policy number and customer name.
-- Matching invoice references are linked to Cancellation / Endorsement cases and displayed
-  in the case detail and EFD processing history.
-- VAT import batch deletion removes only ledger entries and period balances belonging to
-  the selected `VatLedgerUpload`; manual VAT movements, returns and other uploads are retained.
-- Investment deletion removes its dependent reminder logs first. Imported batch deletion removes
-  only investments and reminder logs associated with that batch; manually registered investments
-  and other batches remain.
-- New tables are created with `db.create_all()` on startup. No database drop, reset or truncation
-  is performed. Review the backup before deploying any schema changes to production.
+The VAT module is part of CETTP and does not include or connect to the separate Fixed Asset Governance / FAR application.

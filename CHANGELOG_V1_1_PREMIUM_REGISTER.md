@@ -1,28 +1,16 @@
-# CETTP V3.2.0 Build Verification
+# V1.1 enhancement: Premium Register cancellation tracker
 
-## Static checks completed
-- Python source files parsed successfully with `ast`.
-- Python source files compiled successfully with `py_compile`.
-- All Jinja HTML templates parsed successfully.
-- Added route definitions found for VAT import-batch deletion, investment edit/delete and investment imported-batch deletion.
-- EFD history model and shared SQLAlchemy persistence routes are present.
-- ZIP contents are derived from the uploaded V3.1.0 source project.
+This package is based on the unchanged V1.1 CETTP application. It adds a separate Tax Compliance sidebar option for Premium Register cancellation and endorsement tracking.
 
-## Not verified in this environment
-- Full Flask application import and runtime tests could not be run because Flask / Flask-SQLAlchemy dependencies are not installed in the build environment.
-- Existing production PostgreSQL schema and records were not accessed.
-- Render deployment and Yahoo SMTP delivery were not tested.
-- Yahoo App Password must be configured as `MAIL_PASSWORD` in the existing Render service before email delivery can work.
+## Added
+- Import standard unprotected `.xlsx`/`.xlsm` or `.csv` AIMS Premium Register files by detecting the `POLICY NO` and `GROSS PREMIUM` columns.
+- Pair negative and positive premium transactions by policy number; exact absolute amount matches are classified as `Matched amount`; a different positive amount is classified as a potential endorsement requiring review; no positive transaction on the policy is classified as `Pure cancellation`.
+- Record a mandatory cancellation/endorsement reason, TRA status and TRA reference per negative premium record.
+- Import selected or all unimported detected records into the existing CETTP Case workflow, retaining the detected amounts and classification in the tracker.
+- Export the cancellation tracker to Excel with reasons, TRA statuses/references and linked case references.
+- Download a CSV header template matching the AIMS Premium Register headings.
 
-## Deployment safeguards
-- No database reset, drop, truncate, or change to `DATABASE_URL` / `SECRET_KEY` is included.
-- New EFD records use a new `efd_invoice_records` table created by the existing `db.create_all()` startup.
-- VAT batch deletion is scoped to one upload ID and its ledger entries / period balances.
-- Investment batch deletion is scoped to the selected batch and its investment reminder logs.
-- Existing manually registered investments, other import batches, VAT manual movements, VAT return records, cases, and case attachments are not deleted by these new batch-delete routes.
-
-## Important EFD storage note
-Newly processed EFD invoices and their processed DOCX bytes are stored in the shared CETTP SQLAlchemy database.
-The pre-existing local SQLite EFD history is not automatically migrated as it contains metadata only and
-does not retain the processed DOCX binary. Draft EFD batch staging remains local until successful processing;
-successfully processed items are then stored in PostgreSQL.
+## Controls and limitations
+- Pairing is a suggestion and must be checked against source documents before submission to TRA.
+- The imported source file previously supplied could not be read as a standard XLSX, so use an unprotected Excel workbook or CSV export.
+- This enhancement does not change the V1.1 database URI handling, PostgreSQL persistence behavior, Render configuration or `/health` behavior.
