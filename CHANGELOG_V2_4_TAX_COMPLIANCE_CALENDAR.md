@@ -1,8 +1,6 @@
-# CETTP v2.1 — EFD-to-Invoice Portal Integration
+# CETTP v1.8 – Initiator submission fix
 
-- Added EFD-to-Invoice as a third option on the pre-login service selection page.
-- Mounted the existing EFD invoice processing utility under `/efd-invoice/` using a Flask Blueprint to avoid route collisions with CETTP.
-- Preserved Initiator and Tax Compliance workflows and case-edit/resubmission features.
-- Added `python-docx` and `qrcode[pil]` dependencies.
-- EFD processing history remains in its own SQLite database, configurable through `EFD_PORTAL_DATA_DIR`; configure persistent storage for durable history on Render.
-- EFD utility currently has no role login; access should be restricted to approved internal users.
+- Fixed Initiator case submission validation. The Initiator name field is hidden for Initiators, but was still marked required by WTForms; this caused `validate_on_submit()` to reject the form before saving the case or creating a Tax Compliance notification.
+- The application now populates the required Initiator name field from the email-only login session before validation.
+- Tax Compliance submissions continue to use the name entered in the form.
+- No database schema, database URL, hosting configuration, or WHT functionality was changed.

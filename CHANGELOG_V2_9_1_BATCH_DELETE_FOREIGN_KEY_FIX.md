@@ -1,20 +1,13 @@
-# V2.5 – Compliance Calendar workspace integration and deadline scheduling
+# CETTP v2.2 – EFD CSRF and Return Navigation Fix
 
-## Changes
-- Removed the standalone Tax Compliance Calendar service card from the public portal landing page.
-- Removed the calendar from the global sidebar. Tax Compliance officers now open it from the **Tax Compliance Tools** card on the Tax Compliance Workspace dashboard.
-- Added automatic, duplicate-safe generation of recurring deadlines for the current and following calendar year:
-  - WHT, PAYE and SDL returns: 7th of each month.
-  - VAT return: 20th of each month.
-  - Corporate income tax annual return: 30 June each year.
-  - Corporate income tax provisional return: 31 March each year.
-  - Corporate income tax instalment payments: 31 March, 30 June, 30 September and 31 December each year.
-- Recurring dates are schedule-controlled. Officers can update assignment, status, filing/completion date, payment amount, control number, notes and evidence, but cannot change the scheduled due date.
-- Added one-time manual deadline categories for Tax Audit, Tax Objection, Tax Appeal, Demand Notice, TRA Verification and other matters.
-- Added milestone/activity choices including notification received, information request, response to information request, response to audit findings, exit meeting, objection filing, appeal filing, demand notice response, hearing and follow-up.
-- Existing deadline, audit and attachment tables are reused; no database schema migration is introduced.
+## Fixes
+- Added the Flask-WTF CSRF token as a hidden field in the EFD invoice processing form. This allows the globally enabled CSRF protection in `app.py` to validate the POST request to `/efd-invoice/process`.
+- Added a prominent **Back to CETTP Portal** link on the EFD dashboard and processing-history page. Both links return to the CETTP home page (`/`).
+- Kept the existing EFD invoice processing route protected by CSRF; no global CSRF exemption was introduced.
+- Kept the existing CETTP and EFD routes, dependencies, and database configuration unchanged.
 
-## Important
-- The schedule follows the dates supplied by the user. Tax Compliance should validate statutory applicability and dates against current TRA requirements before relying on them.
-- Recurring records are generated when the calendar is first opened after deployment. The generator is idempotent and will not create duplicate recurring records for the same obligation, activity, period and due date.
-- Existing database URL and Render service configuration should remain unchanged. Back up the production database before deployment.
+## Deployment
+Replace the application files from this package in the existing repository and redeploy the existing Render service. Keep the current `DATABASE_URL`, `SECRET_KEY`, and EFD persistent-storage environment settings unchanged. The CSRF fix relies on the existing Flask session and secret key; users should load a fresh EFD dashboard page before submitting an invoice after deployment.
+
+## Validation
+Python syntax compilation and ZIP integrity were checked. A live Flask request test was not possible in the build environment because Flask dependencies are not installed there.

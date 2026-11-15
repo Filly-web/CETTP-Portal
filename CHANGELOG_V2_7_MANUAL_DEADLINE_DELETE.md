@@ -1,13 +1,8 @@
-# V2.4 – Tax Compliance Calendar & Monitoring
+# CETTP v2.1 — EFD-to-Invoice Portal Integration
 
-- Added a Tax Compliance Calendar service option and Tax Compliance sidebar navigation.
-- Added manual creation and editing of separate filing/payment obligations, due dates, periods, assigned officers, status, completion dates, payment amounts and control numbers.
-- Added dashboard counts for due in seven days, due today, overdue, payment pending and completed.
-- Added document evidence uploads stored in the application database, CSV export, and per-obligation audit history.
-- Added overdue status calculation without overwriting the saved workflow status.
-
-## Deployment and database
-The app's existing startup `db.create_all()` will create the three new calendar tables on startup without dropping or replacing existing tables. Existing `DATABASE_URL`, Render service, and EFD portal configuration are unchanged. Back up the production database before deployment.
-
-## Important
-This release does not hard-code statutory due dates or automatically create future periods. Tax Compliance must enter and validate each deadline against current TRA/statutory requirements. Filing and payment dates should be separate obligations where they differ. Reminders are currently visible through the dashboard counters and overdue labels; background email/push reminders are not included in this first release.
+- Added EFD-to-Invoice as a third option on the pre-login service selection page.
+- Mounted the existing EFD invoice processing utility under `/efd-invoice/` using a Flask Blueprint to avoid route collisions with CETTP.
+- Preserved Initiator and Tax Compliance workflows and case-edit/resubmission features.
+- Added `python-docx` and `qrcode[pil]` dependencies.
+- EFD processing history remains in its own SQLite database, configurable through `EFD_PORTAL_DATA_DIR`; configure persistent storage for durable history on Render.
+- EFD utility currently has no role login; access should be restricted to approved internal users.

@@ -1,6 +1,10 @@
-# CETTP v1.8 – Initiator submission fix
+# Initiator email-only access (pilot)
 
-- Fixed Initiator case submission validation. The Initiator name field is hidden for Initiators, but was still marked required by WTForms; this caused `validate_on_submit()` to reject the form before saving the case or creating a Tax Compliance notification.
-- The application now populates the required Initiator name field from the email-only login session before validation.
-- Tax Compliance submissions continue to use the name entered in the form.
-- No database schema, database URL, hosting configuration, or WHT functionality was changed.
+- Initiators enter an email address without a password.
+- The email is stored in the session and recorded as the initiator identity on new cases.
+- Initiator name is read-only in the case form to keep attribution consistent.
+- Basic email format validation is applied.
+- Tax Compliance access behavior is unchanged.
+
+## Security limitation
+Email-only access does not authenticate or verify the person. Anyone can enter another person's email address. This should be limited to a controlled pilot and should not be treated as secure production access. Add verified email/SSO or password authentication before handling sensitive production records.

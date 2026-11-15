@@ -1,27 +1,82 @@
-# Investment WHT Credits – CETTP
+# CETTP V3.0.0 – Existing Render service deployment
 
-Open the module from Tax Compliance Workspace → Investment WHT Credits.
+This package is arranged with the application files at the ZIP root. In particular, `requirements.txt` contains **only pip package requirements**. Do not copy the text of this README or any changelog into `requirements.txt`.
 
-## Batch upload
-1. Select **Download batch template**.
-2. Complete the required bank, TIN, principal, nature, commencement date, maturity date and annual rate fields.
-3. Enter actual WHT already recorded, if any.
-4. Optionally enter **Confirmed Expected Interest (Optional)** where the bank's investment advice confirms a different expected interest amount. This overrides the calculated interest for WHT computation while the calculated amount remains stored for comparison.
-5. Upload the completed `.xlsx` workbook.
+## Deploy to the existing Render service
 
-The expected interest calculation is:
+1. Back up the current production database before deploying.
+2. Extract this ZIP. The files `app.py`, `requirements.txt`, `Procfile`, `runtime.txt`, `templates/` and `static/` should be directly inside the repository root (not inside another nested `CETTP_Integrated/` directory).
+3. Update the existing GitHub repository with these files. Do not create a new Render service or a new database.
+4. In the existing Render Web Service, keep the current database attachment and environment variables unchanged. In particular, do not change `DATABASE_URL` or `SECRET_KEY`.
+5. Confirm the existing service's Root Directory is blank (repository root). Use:
+   - Build command: `pip install -r requirements.txt`
+   - Start command: `gunicorn app:app`
+6. Deploy the existing service. Check `/health` and review Render Logs after deployment.
+7. Sign in as an Initiator, create one test request with the mandatory cancelled invoice/EFD attachment, and confirm that it appears in the Tax Compliance Case Register and Notifications.
 
-`Principal × Annual Rate (%) × Actual Investment Days ÷ 365`
+## What this release addresses
 
-Expected WHT is 10% of the calculated or bank-confirmed expected interest. The template's **Expected WHT (10%)** column is retained to match the register format; CETTP recalculates this amount rather than trusting an uploaded formula/value.
+- Initiator email is used as the Initiator username; no OTP or password is requested for Initiator entry.
+- Initiator name is taken from the login email and is not required as an editable form field.
+- Form validation errors are displayed and written to the application log rather than silently redisplaying the form.
+- Case, attachment, audit entry and Tax Compliance in-app notification are committed in one database transaction. On a database error, the transaction is rolled back and the exception is logged.
+- Tax Compliance login controls are unchanged.
+- Existing `DATABASE_URL` configuration is unchanged. No database or Render service is defined in this package.
 
-## Reconciliation
-After maturity, enter the actual WHT deducted/remitted by the bank, certificate reference and date, and attach the TRA WHT certificate. Outstanding WHT receivable is the positive difference between expected WHT and actual WHT; it cannot become negative.
+## Requirements file
 
-## Email reminders
-The application sends three event reminders when its secured reminder endpoint is invoked daily by the configured scheduler:
-- 5 days before maturity;
-- on the maturity date;
-- on the 8th day of the month following maturity, after the 7th-day WHT filing deadline, to verify the TRA WHT certificate.
+`requirements.txt` is a plain UTF-8 list of Python dependencies, one per line. Keep explanatory notes, README text and changelogs out of this file.
 
-See `CHANGELOG_V3_1_0_INVESTMENT_WHT_CREDITS.md` for the environment variables and daily Render Cron Job configuration. SMTP credentials and the cron token must be configured by an authorized administrator; they must never be committed to GitHub.
+## Important
+
+The Initiator email-only login does not verify ownership of the email address. Use it only within a controlled pilot environment. A successful code build does not by itself prove that the production database is reachable; verify one test submission in the deployed service.
+
+## V2.9.2 Premium Register batch deletion
+- This release deletes only the selected upload history row and its tracker rows.
+- Linked CETTP cases are retained to protect case workflow and audit history, including cases shared by more than one register batch.
+- A failed operation is rolled back. Check Render Logs for `Premium Register batch deletion failed` and use the timestamp reference displayed in the portal.
+- After deployment, confirm `/health` reports `3.0.0-vat-control`, then test deletion using a non-critical test upload before deleting a live batch.
+
+
+## V2.9.3 foreign-key batch deletion fix
+- Deletes only the selected batch tracker rows before deleting its upload-history row.
+- Does not delete linked Case records.
+- Includes an explicit flush after child-row deletion and rolls back on failure.
+
+
+## V3.0.0 VAT Control Account
+See `README_V3_0_0_VAT_CONTROL_ACCOUNT.md` for the VAT Control Account workflow and `CHANGELOG_V3_0_0_VAT_CONTROL_ACCOUNT.md` for its implementation details. The module adds new tables only; it does not change the existing database URL or Render service configuration.
+
+
+## CETTP V3.2.0 central email configuration
+
+Keep the existing Render Web Service, PostgreSQL database, `DATABASE_URL`, and `SECRET_KEY`.
+Add these environment variables to the existing service (do not replace existing secrets):
+
+- `MAIL_SERVER=smtp.mail.yahoo.com`
+- `MAIL_PORT=587`
+- `MAIL_USE_TLS=true`
+- `MAIL_USERNAME=temporarytin2026@yahoo.com`
+- `MAIL_PASSWORD` = Yahoo App Password (enter only in Render; never commit it)
+- `MAIL_DEFAULT_SENDER=temporarytin2026@yahoo.com`
+- `CETTP_TAX_COMPLIANCE_EMAIL` = approved recipient(s)
+- `CETTP_INVESTMENT_WHT_EMAIL` = approved investment reminder recipient(s)
+- `INVESTMENT_WHT_CRON_TOKEN` = long random token for scheduled reminder requests
+
+Configure a daily Render Cron Job to POST to `/tax-investment-wht/reminders/run` with header
+`X-CETTP-CRON-TOKEN: <same token>`. SMTP delivery cannot be verified until valid credentials
+and recipient addresses are configured in Render.
+
+## V3.2.0 data preservation notes
+
+- New EFD-to-Invoice processing records and processed DOCX files are stored in the existing
+  CETTP SQLAlchemy database, with optional invoice reference, policy number and customer name.
+- Matching invoice references are linked to Cancellation / Endorsement cases and displayed
+  in the case detail and EFD processing history.
+- VAT import batch deletion removes only ledger entries and period balances belonging to
+  the selected `VatLedgerUpload`; manual VAT movements, returns and other uploads are retained.
+- Investment deletion removes its dependent reminder logs first. Imported batch deletion removes
+  only investments and reminder logs associated with that batch; manually registered investments
+  and other batches remain.
+- New tables are created with `db.create_all()` on startup. No database drop, reset or truncation
+  is performed. Review the backup before deploying any schema changes to production.

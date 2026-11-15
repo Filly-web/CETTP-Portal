@@ -1,7 +1,3 @@
-# V3.0.2 — Render entry-point and EFD batch fix
+# Superseded batch deletion change
 
-- Restored the valid root Flask `app.py` source.
-- Kept Jinja/HTML content in the `templates/` directory.
-- Added direct EFD batch-processing links to the EFD Portal sidebar and Quick links.
-- Retained the one-invoice-at-a-time staging workflow and ZIP batch download.
-- Retained the V3.0.1 VAT Control Account and existing CETTP features.
+This earlier V2.9.1 change is superseded by V2.9.2. The current implementation deletes only the selected Premium Register upload and its tracking rows, and retains linked CETTP cases to protect shared references and audit history. See `CHANGELOG_V2_9_2_SAFE_BATCH_DELETE.md`.

@@ -1,3 +1,9 @@
-# Superseded batch deletion change
+# V2.6 – Month-specific compliance calendar and separate TRA/ZRA VAT
 
-This earlier V2.9.1 change is superseded by V2.9.2. The current implementation deletes only the selected Premium Register upload and its tracking rows, and retains linked CETTP cases to protect shared references and audit history. See `CHANGELOG_V2_9_2_SAFE_BATCH_DELETE.md`.
+- Compliance Calendar now defaults to the current month and displays only deadlines due within that month.
+- Added previous/next month navigation. Month and year selections are retained when filtering by tax type or status.
+- Dashboard counters (due in 7 days, due today, overdue, payment pending and completed) are calculated only from obligations in the selected month.
+- Monthly VAT obligations are generated separately as TRA VAT Return and ZRA VAT Return, both due on the 20th.
+- Existing system-generated generic VAT Return records are upgraded in place to TRA VAT Return to avoid duplicate TRA VAT rows; ZRA VAT is added as a separate obligation.
+- Manual deadlines remain visible in the month in which their due date falls.
+- No new database tables or migrations are introduced.
