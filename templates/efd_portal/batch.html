@@ -16,7 +16,6 @@
   <form action="/efd-invoice/batch" method="post" enctype="multipart/form-data" id="add-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="add">
     <div class="field"><label for="invoice">Select one Word invoice (.docx)</label><input id="invoice" name="invoice" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" required><div class="hint">Upload one invoice per submission. Maximum 100 invoices in a batch; each upload is subject to the portal 40 MB request limit.</div></div>
-    <div class="field"><label for="invoice_reference">Invoice number / reference (for CETTP linking)</label><input id="invoice_reference" name="invoice_reference" type="text" maxlength="120" placeholder="Optional invoice number"></div>
     <div class="field"><label for="verification_code">TRA EFD verification code</label><input id="verification_code" name="verification_code" type="text" maxlength="100" placeholder="Enter the verification code" required></div>
     <div class="field"><label for="verification_time">Receipt time</label><input id="verification_time" name="verification_time" type="text" placeholder="HH:MM:SS (e.g. 14:05:09)" pattern="(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]|(?:[01][0-9]|2[0-3])[0-5][0-9][0-5][0-9]" title="Enter HH:MM:SS or HHMMSS" required></div>
     <button class="btn" type="submit" id="add-btn">Add invoice to batch</button>

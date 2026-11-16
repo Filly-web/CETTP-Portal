@@ -1,4 +1,4 @@
-# Britam Tax Reconciliation Portal – CETTP v1.1
+# Britam CETTP V3.3.0 – Tax & Compliance Portal
 
 Integrated internal portal for cancellation and endorsement tracking plus VAT and WHT reconciliation workflows.
 
@@ -75,25 +75,28 @@ The cancellation/endorsement workflow checks for repeated actions across initiat
 - Destructive actions use POST requests protected by Flask-WTF CSRF.
 
 
-## Automatic email alerts for new cancellation / endorsement requests
+## Centralized Yahoo SMTP email service (V3.3.0)
 
-When an Initiator submits a new request through **New Request**, CETTP commits the case first and then attempts to email a shared Tax Compliance mailbox only if an approved recipient and sender are configured in the deployment environment. Email failure does not cancel or roll back the case submission. Notifications are recorded in the `email_notification_log` database table with case reference, recipient, status (`sent`, `failed`, or `not_configured`), attempt count, timestamp, and error detail. A unique case/event constraint suppresses duplicate sends for the same newly initiated case. Premium Register imports do not trigger this new-Initiator-request email.
+All outbound CETTP email is routed through one central delivery function. It is used for new cancellation/endorsement case notifications, Investment WHT maturity and certificate reminders, and the email configuration test. The **Email Settings & Logs** workspace shows the active non-secret SMTP settings, sends a test message, and displays the latest 100 delivery attempts in the central `portal_email_logs` table. Existing case-level and Investment WHT reminder logs are retained for their respective workflows.
 
-Configure these environment variables in the deployment environment (for example, Render Environment):
+Configure these variables in the existing Render service environment:
 
 | Variable | Purpose |
 |---|---|
-| `CETTP_TAX_COMPLIANCE_EMAIL` | Optional approved recipient(s). No recipient is preconfigured. Multiple recipients may be separated by commas or semicolons. |
-| `M365_SMTP_HOST` | Optional; defaults to `smtp.office365.com`. |
-| `M365_SMTP_PORT` | Optional; defaults to `587` (STARTTLS). |
-| `M365_SMTP_USERNAME` | Microsoft 365 mailbox username approved for SMTP submission. |
-| `M365_SMTP_PASSWORD` | Secret credential/app password supplied by Britam IT, if permitted by policy. Store only as an environment secret. |
-| `M365_SMTP_FROM` | Approved sender address; defaults to `M365_SMTP_USERNAME`. |
-| `CETTP_BASE_URL` | Public CETTP base URL used to build the link in the email, e.g. `https://your-approved-cettp-host`. |
+| `SMTP_HOST` | Yahoo SMTP host; set to `smtp.mail.yahoo.com`. |
+| `SMTP_PORT` | `587` for STARTTLS (or `465` for implicit TLS). |
+| `SMTP_USERNAME` | `temporarytin2026@yahoo.com`. |
+| `SMTP_PASSWORD` | Yahoo-generated App Password. Store only as a Render secret; never commit it. |
+| `SMTP_FROM` | Approved sender address, normally `temporarytin2026@yahoo.com`. |
+| `SMTP_TIMEOUT` | Optional connection timeout in seconds; default 15, allowed range 5–60. |
+| `CETTP_TAX_COMPLIANCE_EMAIL` | Approved recipient(s), comma/semicolon separated. |
+| `CETTP_INVESTMENT_WHT_EMAIL` | Optional Investment WHT recipient override; falls back to `CETTP_TAX_COMPLIANCE_EMAIL`. |
+| `CETTP_EMAIL_TEST_TO` | Optional default test recipient. |
+| `CETTP_BASE_URL` | Public CETTP base URL used in case notification links. |
 
-**Microsoft 365 / IT approval required:** This implementation uses authenticated SMTP submission with STARTTLS. Britam IT must confirm that SMTP AUTH is permitted for the sender mailbox and tenant, provide the approved credential method, and approve the sender/recipient configuration. If SMTP AUTH is disabled or organizational policy requires OAuth/Graph, this SMTP transport must be replaced with the approved Microsoft Graph mail-sending method; do not weaken tenant security to make SMTP work.
+Use STARTTLS on port 587. The application does not embed any Yahoo App Password. A connection timeout is recorded with its exception type and detail in the central email log; email failure does not roll back case submission or other CETTP work. Render Free networking may still prevent outbound SMTP connections; this package improves diagnostics but cannot override hosting-provider network restrictions.
 
-For local testing, set the variables in your shell or a local `.env` file loaded by your development setup. Do not commit credentials, and do not add real credentials to `.env.example`. The application logs send/failure events to its application logger and records each case's notification outcome in the database. Failed emails are not automatically retried to avoid duplicate delivery; check failed/not-configured records and correct configuration before implementing a controlled retry action.
+Open **Email Settings & Logs** from the Tax Compliance sidebar to test delivery and inspect outcomes. All existing database tables and production records are preserved; startup `db.create_all()` creates the new central email audit table if it is not already present and does not drop or reset tables.
 
 
 ## In-app Tax Compliance notifications (no email required)
@@ -132,13 +135,3 @@ See `README_V3_0_0_VAT_CONTROL_ACCOUNT.md` for user instructions and `CHANGELOG_
 ## Investment WHT Credits (V3.1.0)
 
 The Tax Compliance Workspace includes an Investment WHT Credits register for bank deposits and other investments. It supports individual registration, Excel batch upload, actual-days/365 expected interest calculations with a bank-confirmed override, 10% expected WHT, maturity-based outstanding WHT receivable, actual WHT reconciliation, TRA certificate attachments, and scheduled email reminders. See `README_INVESTMENT_WHT_CREDITS.md` and `CHANGELOG_V3_1_0_INVESTMENT_WHT_CREDITS.md` for user instructions and reminder deployment configuration.
-
-
-## V3.2.0 Complete Enhancement
-
-V3.2.0 adds Investment WHT edit/delete and imported-batch deletion, VAT Control Account
-import-batch deletion, and shared PostgreSQL persistence for newly processed EFD invoices.
-EFD invoice references can be linked to Cancellation / Endorsement cases and viewed from
-the case detail and EFD processing history. Existing case and investment notification paths
-use the central Yahoo SMTP environment configuration. See `CHANGELOG_V3_2_0_COMPLETE_ENHANCEMENT.md`
-and `README_DEPLOY_EXISTING_RENDER.md` for deployment notes.

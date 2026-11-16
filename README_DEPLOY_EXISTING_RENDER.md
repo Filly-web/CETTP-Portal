@@ -46,37 +46,3 @@ The Initiator email-only login does not verify ownership of the email address. U
 
 ## V3.0.0 VAT Control Account
 See `README_V3_0_0_VAT_CONTROL_ACCOUNT.md` for the VAT Control Account workflow and `CHANGELOG_V3_0_0_VAT_CONTROL_ACCOUNT.md` for its implementation details. The module adds new tables only; it does not change the existing database URL or Render service configuration.
-
-
-## CETTP V3.2.0 central email configuration
-
-Keep the existing Render Web Service, PostgreSQL database, `DATABASE_URL`, and `SECRET_KEY`.
-Add these environment variables to the existing service (do not replace existing secrets):
-
-- `MAIL_SERVER=smtp.mail.yahoo.com`
-- `MAIL_PORT=587`
-- `MAIL_USE_TLS=true`
-- `MAIL_USERNAME=temporarytin2026@yahoo.com`
-- `MAIL_PASSWORD` = Yahoo App Password (enter only in Render; never commit it)
-- `MAIL_DEFAULT_SENDER=temporarytin2026@yahoo.com`
-- `CETTP_TAX_COMPLIANCE_EMAIL` = approved recipient(s)
-- `CETTP_INVESTMENT_WHT_EMAIL` = approved investment reminder recipient(s)
-- `INVESTMENT_WHT_CRON_TOKEN` = long random token for scheduled reminder requests
-
-Configure a daily Render Cron Job to POST to `/tax-investment-wht/reminders/run` with header
-`X-CETTP-CRON-TOKEN: <same token>`. SMTP delivery cannot be verified until valid credentials
-and recipient addresses are configured in Render.
-
-## V3.2.0 data preservation notes
-
-- New EFD-to-Invoice processing records and processed DOCX files are stored in the existing
-  CETTP SQLAlchemy database, with optional invoice reference, policy number and customer name.
-- Matching invoice references are linked to Cancellation / Endorsement cases and displayed
-  in the case detail and EFD processing history.
-- VAT import batch deletion removes only ledger entries and period balances belonging to
-  the selected `VatLedgerUpload`; manual VAT movements, returns and other uploads are retained.
-- Investment deletion removes its dependent reminder logs first. Imported batch deletion removes
-  only investments and reminder logs associated with that batch; manually registered investments
-  and other batches remain.
-- New tables are created with `db.create_all()` on startup. No database drop, reset or truncation
-  is performed. Review the backup before deploying any schema changes to production.

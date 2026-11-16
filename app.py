@@ -85,25 +85,6 @@ class Case(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
     closed_at = db.Column(db.DateTime)
 
-class EFDInvoiceRecord(db.Model):
-    """Permanently stored EFD-processed invoice, shared with cancellation cases."""
-    __tablename__ = "efd_invoice_records"
-    id = db.Column(db.Integer, primary_key=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
-    process_date = db.Column(db.Date, nullable=False, index=True)
-    filename = db.Column(db.String(255), nullable=False)
-    processed_filename = db.Column(db.String(255), nullable=False)
-    verification_code = db.Column(db.String(120), nullable=False, index=True)
-    receipt_time = db.Column(db.String(8), nullable=False)
-    invoice_reference = db.Column(db.String(120), index=True)
-    policy_number = db.Column(db.String(80), index=True)
-    customer_name = db.Column(db.String(180), index=True)
-    batch_id = db.Column(db.String(80), index=True)
-    processed_data = db.Column(db.LargeBinary, nullable=False)
-    case_id = db.Column(db.Integer, db.ForeignKey("case.id", ondelete="SET NULL"), index=True)
-    case = db.relationship("Case", backref=db.backref("efd_invoice_records", lazy=True))
-
-
 class AuditLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     case_id = db.Column(db.Integer, db.ForeignKey("case.id"), nullable=False, index=True)
@@ -128,6 +109,22 @@ class EmailNotificationLog(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     sent_at = db.Column(db.DateTime)
     __table_args__ = (UniqueConstraint("case_id", "event_key", name="uq_email_notification_case_event"),)
+
+
+class PortalEmailLog(db.Model):
+    """Central audit log for every outbound CETTP email."""
+    __tablename__ = "portal_email_logs"
+    id = db.Column(db.Integer, primary_key=True)
+    module = db.Column(db.String(80), nullable=False, index=True)
+    event_key = db.Column(db.String(100), nullable=False, index=True)
+    reference_id = db.Column(db.Integer, index=True)
+    recipient = db.Column(db.String(1000), nullable=False)
+    subject = db.Column(db.String(255), nullable=False)
+    status = db.Column(db.String(30), nullable=False, default="pending", index=True)
+    attempts = db.Column(db.Integer, nullable=False, default=0)
+    error_message = db.Column(db.String(2000))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    sent_at = db.Column(db.DateTime)
 
 
 class InAppNotification(db.Model):
@@ -519,30 +516,105 @@ def log_action(case, action, details=""):
                             actor_name=session.get("actor_name", ""), action=action, details=details))
 
 def _notification_recipients():
-    """Read shared mailbox recipient(s) from environment; allow semicolon/comma separated addresses."""
+    """Read approved portal notification recipients (comma/semicolon separated)."""
     raw = os.environ.get("CETTP_TAX_COMPLIANCE_EMAIL", "").strip()
     return [address.strip() for address in raw.replace(";", ",").split(",") if address.strip()]
 
 
-def send_new_request_notification(case):
-    """Log and send one notification per initiated case. Email failure never rolls back a submitted case."""
-    recipients = _notification_recipients()
-    recipient_label = ", ".join(recipients) if recipients else ""
+def _central_send_email(module, event_key, subject, body, recipients=None, reference_id=None):
+    """Single outbound email transport and audit path for every CETTP module.
 
-    # A unique case/event record prevents duplicate sends if this function is invoked again.
+    Yahoo SMTP is the default. Credentials are read only from Render environment
+    variables; no credential or app password is embedded in the source.
+    Returns (success, error_message).
+    """
+    recipients = recipients or _notification_recipients()
+    recipients = [str(x).strip() for x in recipients if str(x).strip()]
+    recipient_label = ", ".join(recipients) if recipients else "NOT_CONFIGURED"
+    log = PortalEmailLog(module=(module or "portal")[:80], event_key=(event_key or "notification")[:100],
+        reference_id=reference_id, recipient=recipient_label[:1000], subject=(subject or "CETTP notification")[:255], status="pending", attempts=0)
+    db.session.add(log)
+    try:
+        db.session.flush()
+    except Exception:
+        db.session.rollback()
+        logger.exception("Unable to create central email audit record")
+        return False, "Unable to create email audit record."
+
+    if not recipients:
+        log.status = "not_configured"
+        log.error_message = "No recipient configured. Set CETTP_TAX_COMPLIANCE_EMAIL or a module-specific recipient."
+        db.session.commit()
+        logger.warning("Email not sent: no recipients configured (module=%s event=%s)", module, event_key)
+        return False, log.error_message
+
+    host = os.environ.get("SMTP_HOST", "smtp.mail.yahoo.com").strip()
+    try:
+        port = int(os.environ.get("SMTP_PORT", "587"))
+    except (TypeError, ValueError):
+        port = 587
+    username = os.environ.get("SMTP_USERNAME", "").strip()
+    password = os.environ.get("SMTP_PASSWORD", "")
+    sender = os.environ.get("SMTP_FROM", "temporarytin2026@yahoo.com").strip()
+    try:
+        timeout = max(5, min(int(os.environ.get("SMTP_TIMEOUT", "15")), 60))
+    except (TypeError, ValueError):
+        timeout = 15
+
+
+    if not username or not password or not sender:
+        log.status = "not_configured"
+        log.error_message = "SMTP credentials incomplete. Set SMTP_USERNAME, SMTP_PASSWORD and SMTP_FROM in Render."
+        db.session.commit()
+        return False, log.error_message
+
+    message = EmailMessage()
+    message["Subject"] = subject or "CETTP notification"
+    message["From"] = sender
+    message["To"] = recipients[0]
+    if len(recipients) > 1:
+        message["Cc"] = ", ".join(recipients[1:])
+    message.set_content(body or "")
+
+    log.attempts = 1
+    try:
+        context = ssl.create_default_context()
+        if port == 465 or os.environ.get("SMTP_USE_SSL", "").strip().lower() in {"1", "true", "yes"}:
+            with smtplib.SMTP_SSL(host, port, timeout=timeout, context=context) as server:
+                server.ehlo()
+                server.login(username, password)
+                server.send_message(message)
+        else:
+            with smtplib.SMTP(host, port, timeout=timeout) as server:
+                server.ehlo()
+                if os.environ.get("SMTP_STARTTLS", "true").strip().lower() not in {"0", "false", "no"}:
+                    server.starttls(context=context)
+                    server.ehlo()
+                server.login(username, password)
+                server.send_message(message)
+        log.status = "sent"
+        log.sent_at = datetime.utcnow()
+        log.error_message = None
+        db.session.commit()
+        logger.info("Central email delivered module=%s event=%s recipient_count=%s", module, event_key, len(recipients))
+        return True, None
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {str(exc)[:1500]}"
+        log.status = "failed"
+        log.error_message = error[:2000]
+        db.session.commit()
+        logger.exception("Central email failed module=%s event=%s", module, event_key)
+        return False, error
+
+
+def send_new_request_notification(case):
+    """Log and send one notification per initiated case via the central email service."""
+    recipients = _notification_recipients()
+    recipient_label = ", ".join(recipients) if recipients else "NOT_CONFIGURED"
     existing = EmailNotificationLog.query.filter_by(case_id=case.id, event_key="new_request").first()
     if existing:
         logger.info("New-request notification already logged for %s (status=%s)", case.reference, existing.status)
         return existing.status == "sent"
-
-    if not recipients:
-        log = EmailNotificationLog(case_id=case.id, case_reference=case.reference,
-            event_key="new_request", recipient="NOT_CONFIGURED", status="not_configured",
-            attempts=0, error_message="Set CETTP_TAX_COMPLIANCE_EMAIL to one or more approved notification recipients.")
-        db.session.add(log)
-        db.session.commit()
-        logger.warning("Email notification not configured for case %s", case.reference)
-        return False
 
     log = EmailNotificationLog(case_id=case.id, case_reference=case.reference,
         event_key="new_request", recipient=recipient_label, status="pending", attempts=0)
@@ -551,33 +623,15 @@ def send_new_request_notification(case):
         db.session.commit()
     except Exception:
         db.session.rollback()
-        # Another worker may have inserted the unique case/event row concurrently.
         existing = EmailNotificationLog.query.filter_by(case_id=case.id, event_key="new_request").first()
         if existing:
-            logger.info("Concurrent duplicate notification suppressed for %s", case.reference)
             return existing.status == "sent"
-        logger.exception("Unable to create notification log for %s", case.reference)
+        logger.exception("Unable to create request email log for %s", case.reference)
         return False
 
-    host = os.environ.get("MAIL_SERVER", "smtp.mail.yahoo.com").strip()
-    try:
-        port = int(os.environ.get("MAIL_PORT", "587"))
-    except ValueError:
-        port = 587
-    username = os.environ.get("MAIL_USERNAME", "temporarytin2026@yahoo.com").strip()
-    password = os.environ.get("MAIL_PASSWORD", "")
-    sender = os.environ.get("MAIL_DEFAULT_SENDER", username).strip()
-
-    if not username or not password or not sender:
-        log.status = "not_configured"
-        log.error_message = "Central Yahoo SMTP settings incomplete; configure MAIL_PASSWORD and notification recipient."
-        db.session.commit()
-        logger.warning("Microsoft 365 SMTP settings incomplete for case %s", case.reference)
-        return False
-
-    subject = f"CETTP – New {case.case_type} Request – {case.reference}"
     amount = f"TZS {case.adjustment_amount:,.2f}" if case.adjustment_amount is not None else "Not provided"
     effective_date = case.effective_date.strftime("%d %b %Y") if case.effective_date else "Not provided"
+    subject = f"CETTP – New {case.case_type} Request – {case.reference}"
     body = f"""A new cancellation/endorsement request has been submitted in Britam CETTP and requires Tax Compliance review.
 
 Case reference: {case.reference}
@@ -597,41 +651,13 @@ Open the request in CETTP after signing in: {os.environ.get('CETTP_BASE_URL', re
 
 This is an automated notification. Please do not reply to this message.
 """
-    message = EmailMessage()
-    message["Subject"] = subject
-    message["From"] = sender
-    message["To"] = recipients[0]
-    if len(recipients) > 1:
-        message["Cc"] = ", ".join(recipients[1:])
-    message.set_content(body)
-
+    ok, error = _central_send_email("case_workflow", "new_request", subject, body, recipients=recipients)
     log.attempts = 1
-    try:
-        context = ssl.create_default_context()
-        with smtplib.SMTP(host, port, timeout=20) as server:
-            server.ehlo()
-            server.starttls(context=context)
-            server.ehlo()
-            server.login(username, password)
-            server.send_message(message)
-        log.status = "sent"
-        log.sent_at = datetime.utcnow()
-        log.error_message = None
-        db.session.commit()
-        logger.info("New-request email sent for %s to %s", case.reference, recipient_label)
-        return True
-    except Exception as exc:
-        db.session.rollback()
-        # Re-fetch log after rollback and persist a sanitized, bounded error detail.
-        failed_log = EmailNotificationLog.query.filter_by(case_id=case.id, event_key="new_request").first()
-        if failed_log:
-            failed_log.status = "failed"
-            failed_log.attempts = 1
-            failed_log.error_message = f"{type(exc).__name__}: {str(exc)[:500]}"
-            db.session.commit()
-        logger.exception("New-request email failed for case %s", case.reference)
-        return False
-
+    log.status = "sent" if ok else ("not_configured" if error and any(term in error.lower() for term in ("not configured", "no recipient", "incomplete")) else "failed")
+    log.sent_at = datetime.utcnow() if ok else None
+    log.error_message = error
+    db.session.commit()
+    return ok
 
 def make_reference():
     year = datetime.utcnow().year
@@ -687,6 +713,37 @@ def _tax_actor_name():
 def _notification_is_read(notification_id, actor_name=None):
     actor_name = actor_name or _tax_actor_name()
     return InAppNotificationRead.query.filter_by(notification_id=notification_id, actor_name=actor_name).first() is not None
+
+
+@app.route("/tax-email", methods=["GET"])
+def tax_email_settings():
+    if not _tax_required(): return redirect(url_for("home"))
+    logs = PortalEmailLog.query.order_by(PortalEmailLog.created_at.desc(), PortalEmailLog.id.desc()).limit(100).all()
+    return render_template("tax_email_settings.html", email_logs=logs,
+        smtp_host=os.environ.get("SMTP_HOST", "smtp.mail.yahoo.com"),
+        smtp_port=os.environ.get("SMTP_PORT", "587"),
+        smtp_username=os.environ.get("SMTP_USERNAME", ""),
+        smtp_from=os.environ.get("SMTP_FROM", "temporarytin2026@yahoo.com"),
+        recipients=os.environ.get("CETTP_TAX_COMPLIANCE_EMAIL", ""),
+        configured=bool(os.environ.get("SMTP_USERNAME") and os.environ.get("SMTP_PASSWORD") and os.environ.get("SMTP_FROM")))
+
+
+@app.route("/tax-email/test", methods=["POST"])
+def tax_email_test():
+    if not _tax_required(): return redirect(url_for("home"))
+    target = request.form.get("test_recipient", "").strip()
+    if not target:
+        target = os.environ.get("CETTP_EMAIL_TEST_TO", "").strip() or os.environ.get("CETTP_TAX_COMPLIANCE_EMAIL", "").strip()
+    recipients = [x.strip() for x in target.replace(";", ",").split(",") if x.strip()]
+    if not recipients:
+        flash("Enter a test recipient or configure CETTP_TAX_COMPLIANCE_EMAIL.", "danger")
+        return redirect(url_for("tax_email_settings"))
+    subject = "CETTP email configuration test"
+    body = f"This is a test email from Britam CETTP.\n\nSent at (UTC): {datetime.utcnow():%Y-%m-%d %H:%M:%S}\nSMTP host: {os.environ.get('SMTP_HOST', 'smtp.mail.yahoo.com')}\nSMTP port: {os.environ.get('SMTP_PORT', '587')}\n\nIf you received this message, central CETTP email delivery is working."
+    ok, error = _central_send_email("email_settings", "configuration_test", subject, body, recipients=recipients)
+    if ok: flash(f"Test email sent successfully to {', '.join(recipients)}.", "success")
+    else: flash(f"Email test failed: {error or 'Unknown email delivery error'}", "danger")
+    return redirect(url_for("tax_email_settings"))
 
 
 @app.route("/notifications")
@@ -757,11 +814,6 @@ def _notify_initiator(case, event_key, title, message):
                 title=title[:180], message=message, event_key=event_key[:80]))
     except Exception:
         logger.exception("Could not create initiator notification for %s", case.reference)
-
-
-# Bind EFD module to the shared SQLAlchemy model after model declarations.
-import efd_portal as _efd_module
-_efd_module.EFDInvoiceRecord = EFDInvoiceRecord
 
 
 @app.route("/")
@@ -1077,13 +1129,6 @@ def new_case():
         try:
             db.session.add(case)
             db.session.flush()
-            # Link any EFD-processed invoice whose reference matches this case's original invoice.
-            if case.original_invoice_no:
-                linked_efd = EFDInvoiceRecord.query.filter(
-                    func.lower(EFDInvoiceRecord.invoice_reference) == case.original_invoice_no.lower()
-                ).order_by(EFDInvoiceRecord.created_at.desc()).first()
-                if linked_efd:
-                    linked_efd.case_id = case.id
             log_action(case, "Case initiated", f"{case.case_type} submitted for policy {case.policy_number}")
             for category, _label in ATTACHMENT_CATEGORIES:
                 for uploaded_file in request.files.getlist(f"files_{category}"):
@@ -1145,12 +1190,6 @@ def edit_case(case_id):
                 if isinstance(value, str):
                     value = value.strip() or None
                 setattr(case, name, value)
-            if case.original_invoice_no:
-                linked_efd = EFDInvoiceRecord.query.filter(
-                    func.lower(EFDInvoiceRecord.invoice_reference) == case.original_invoice_no.lower()
-                ).order_by(EFDInvoiceRecord.created_at.desc()).first()
-                if linked_efd:
-                    linked_efd.case_id = case.id
             if role == "tax":
                 case.initiator_name = (form.initiator_name.data or case.initiator_name).strip()
             else:
@@ -1189,9 +1228,7 @@ def case_detail(case_id):
         return redirect(url_for("home"))
     case = Case.query.get_or_404(case_id)
     _initiator_case_access(case)
-    linked_efd_records = EFDInvoiceRecord.query.filter_by(case_id=case.id).order_by(EFDInvoiceRecord.created_at.desc()).all()
-    return render_template("case_detail.html", case=case, linked_efd_records=linked_efd_records,
-                           attachment_categories=ATTACHMENT_CATEGORIES, attachment_category_labels=dict(ATTACHMENT_CATEGORIES))
+    return render_template("case_detail.html", case=case, attachment_categories=ATTACHMENT_CATEGORIES, attachment_category_labels=dict(ATTACHMENT_CATEGORIES))
 
 @app.route("/cases/<int:case_id>/tax-update", methods=["GET", "POST"])
 def tax_update(case_id):
@@ -1206,15 +1243,6 @@ def tax_update(case_id):
                       "replacement_invoice_no", "adjustment_reference", "tax_notes", "closure_notes"):
             value = getattr(form, field).data
             setattr(case, field, value.strip() if isinstance(value, str) and value.strip() else None if isinstance(value, str) else value)
-        # Link processed EFD invoices for both original and replacement invoice references.
-        invoice_refs = [x.lower() for x in (case.original_invoice_no, case.replacement_invoice_no) if x]
-        if invoice_refs:
-            linked_records = EFDInvoiceRecord.query.filter(
-                func.lower(EFDInvoiceRecord.invoice_reference).in_(invoice_refs),
-                or_(EFDInvoiceRecord.case_id.is_(None), EFDInvoiceRecord.case_id == case.id)
-            ).all()
-            for linked_record in linked_records:
-                linked_record.case_id = case.id
         if case.workflow_status == "Closed":
             case.closed_at = datetime.utcnow()
             if not case.closure_notes:
@@ -1442,19 +1470,38 @@ def cancellation_tracker():
     q = request.args.get("q", "").strip()
     status = request.args.get("status", "")
     period = request.args.get("period", "").strip()
-    query = CancellationTrack.query
-    if q: query = query.filter(or_(CancellationTrack.policy_number.ilike(f"%{q}%"), CancellationTrack.insured_name.ilike(f"%{q}%"), CancellationTrack.document_no.ilike(f"%{q}%")))
-    if status: query = query.filter_by(tra_status=status)
+    classification_filter = request.args.get("classification", "").strip()
+    try: page = max(1, int(request.args.get("page", "1")))
+    except ValueError: page = 1
+    per_page = 10
+    base_query = CancellationTrack.query
+    if q:
+        base_query = base_query.filter(or_(CancellationTrack.policy_number.ilike(f"%{q}%"), CancellationTrack.insured_name.ilike(f"%{q}%"), CancellationTrack.document_no.ilike(f"%{q}%")))
+    if status: base_query = base_query.filter_by(tra_status=status)
     if period:
         batches = [u.upload_batch for u in RegisterUpload.query.filter_by(period=period).all()]
-        if batches: query = query.filter(CancellationTrack.upload_batch.in_(batches))
-        else: query = query.filter(CancellationTrack.id == -1)
-    rows = query.order_by(CancellationTrack.created_at.desc(), CancellationTrack.id.desc()).limit(5000).all()
+        base_query = base_query.filter(CancellationTrack.upload_batch.in_(batches)) if batches else base_query.filter(CancellationTrack.id == -1)
+    classification_values = ["Matched amount", "Different amount - review as endorsement", "Pure cancellation"]
+    if classification_filter in classification_values:
+        base_query = base_query.filter_by(classification=classification_filter)
+    total = base_query.count()
+    pages = max(1, (total + per_page - 1) // per_page)
+    if page > pages: page = pages
+    rows = base_query.order_by(CancellationTrack.created_at.desc(), CancellationTrack.id.desc()).offset((page-1)*per_page).limit(per_page).all()
     uploads = RegisterUpload.query.order_by(RegisterUpload.period.desc(), RegisterUpload.created_at.desc()).limit(120).all()
     periods = sorted({u.period for u in RegisterUpload.query.all()}, reverse=True)
+    count_query = CancellationTrack.query
+    if period:
+        batches = [u.upload_batch for u in RegisterUpload.query.filter_by(period=period).all()]
+        count_query = count_query.filter(CancellationTrack.upload_batch.in_(batches)) if batches else count_query.filter(CancellationTrack.id == -1)
+    class_counts = {value: count_query.filter_by(classification=value).count() for value in classification_values}
     return render_template("cancellation_tracker.html", rows=rows, q=q, status=status, period=period,
-                           periods=periods, uploads=uploads, current_period=date.today().strftime("%Y-%m"), tra_statuses=CANCEL_TRA_STATUSES,
-                           total=len(rows), unreasoned=sum(1 for r in rows if not r.cancellation_reason), unsubmitted=sum(1 for r in rows if r.tra_status == "Not Submitted"))
+        classification_filter=classification_filter, classification_values=classification_values,
+        class_counts=class_counts, page=page, pages=pages, per_page=per_page, periods=periods, uploads=uploads,
+        current_period=date.today().strftime("%Y-%m"), tra_statuses=CANCEL_TRA_STATUSES,
+        total=total, unreasoned=base_query.filter(or_(CancellationTrack.cancellation_reason.is_(None), CancellationTrack.cancellation_reason == "")).count(),
+        unsubmitted=base_query.filter_by(tra_status="Not Submitted").count())
+
 
 @app.route("/cancellation-tracker/upload", methods=["POST"])
 def cancellation_tracker_upload():
@@ -1607,11 +1654,18 @@ def cancellation_tracker_update(item_id):
     reason = request.form.get("cancellation_reason", "").strip()
     status = request.form.get("tra_status", "Not Submitted").strip()
     tra_ref = request.form.get("tra_reference", "").strip()
+    classification = request.form.get("classification", row.classification).strip()
+    allowed_classifications = {"Matched amount", "Different amount - review as endorsement", "Pure cancellation"}
     if not reason:
         flash("A cancellation / endorsement reason is required for tracking.", "danger")
     elif status not in CANCEL_TRA_STATUSES:
         flash("Invalid TRA status selected.", "danger")
+    elif classification not in allowed_classifications:
+        flash("Invalid cancellation / endorsement classification selected.", "danger")
+    elif row.case_id and classification != row.classification:
+        flash("Classification can only be corrected before the record is imported into CETTP.", "danger")
     else:
+        row.classification = classification
         row.cancellation_reason = reason[:4000]; row.tra_status = status; row.tra_reference = tra_ref[:120] or None
         if row.case_id:
             case = db.session.get(Case, row.case_id)
@@ -1626,11 +1680,17 @@ def cancellation_tracker_update(item_id):
 def cancellation_tracker_import_to_cettp():
     if not _tax_required(): return redirect(url_for("home"))
     selected = request.form.getlist("item_ids")
+    classification = request.form.get("import_classification", "").strip()
     query = CancellationTrack.query.filter(CancellationTrack.case_id.is_(None))
     if selected:
         try: ids=[int(x) for x in selected]
         except ValueError: ids=[]
         query=query.filter(CancellationTrack.id.in_(ids))
+    elif classification:
+        if classification not in {"Matched amount", "Different amount - review as endorsement", "Pure cancellation"}:
+            flash("Invalid classification selected for import.", "danger")
+            return redirect(url_for("cancellation_tracker"))
+        query=query.filter_by(classification=classification)
     rows=query.order_by(CancellationTrack.id.asc()).all()
     if not rows:
         flash("No unimported records were selected. Select records or use Auto-fill all unimported records.", "warning")
@@ -1984,54 +2044,25 @@ def _investment_wht_send_email(item, event_key, event_date, subject, body):
             recipient=recipient_label, status="pending")
         db.session.add(existing)
         db.session.flush()
-    if not recipients:
-        existing.status = "not_configured"
-        existing.error_message = "Set CETTP_INVESTMENT_WHT_EMAIL or CETTP_TAX_COMPLIANCE_EMAIL."
-        db.session.commit()
-        return False
-    # Central notification sender shared across CETTP modules (Yahoo SMTP).
-    host = os.environ.get("MAIL_SERVER", "smtp.mail.yahoo.com").strip()
-    try: port = int(os.environ.get("MAIL_PORT", "587"))
-    except ValueError: port = 587
-    username = os.environ.get("MAIL_USERNAME", "temporarytin2026@yahoo.com").strip()
-    password = os.environ.get("MAIL_PASSWORD", "")
-    sender = os.environ.get("MAIL_DEFAULT_SENDER", username).strip()
-    if not username or not password or not sender:
-        existing.status = "not_configured"
-        existing.error_message = "Central email settings are incomplete. Configure MAIL_PASSWORD in Render."
-        db.session.commit()
-        return False
-    message = EmailMessage()
-    message["Subject"] = subject
-    message["From"] = sender
-    message["To"] = recipients[0]
-    if len(recipients) > 1: message["Cc"] = ", ".join(recipients[1:])
-    message.set_content(body)
-    try:
-        with smtplib.SMTP(host, port, timeout=20) as server:
-            server.ehlo(); server.starttls(context=ssl.create_default_context()); server.ehlo()
-            server.login(username, password); server.send_message(message)
-        existing.status = "sent"; existing.sent_at = datetime.utcnow(); existing.error_message = None
-        db.session.commit()
-        return True
-    except Exception as exc:
-        existing.status = "failed"; existing.error_message = str(exc)[:1900]
-        db.session.commit()
-        logger.exception("Investment WHT email failed for investment %s", item.id)
-        return False
+    ok, error = _central_send_email("investment_wht", event_key, subject, body, recipients=recipients, reference_id=item.id)
+    existing.status = "sent" if ok else ("not_configured" if error and any(term in error.lower() for term in ("not configured", "no recipient", "incomplete")) else "failed")
+    existing.sent_at = datetime.utcnow() if ok else None
+    existing.error_message = error[:1900] if error else None
+    db.session.commit()
+    return ok
 
 
 @app.route("/tax-investment-wht")
 def tax_investment_wht():
     if not _tax_required(): return redirect(url_for("home"))
     rows = InvestmentWHT.query.order_by(InvestmentWHT.maturity_date.asc(), InvestmentWHT.bank_name.asc()).all()
+    batches = InvestmentWHTBatch.query.order_by(InvestmentWHTBatch.uploaded_at.desc(), InvestmentWHTBatch.id.desc()).all()
     today = _investment_local_today()
     upcoming = [x for x in rows if today <= x.maturity_date <= today + timedelta(days=30)]
     matured_outstanding = [x for x in rows if x.maturity_date < today and x.outstanding_wht > 0]
     total_expected = sum((Decimal(x.expected_wht or 0) for x in rows), Decimal("0.00"))
     total_actual = sum((Decimal(x.actual_wht or 0) for x in rows), Decimal("0.00"))
     total_outstanding = sum((x.outstanding_wht for x in rows), Decimal("0.00"))
-    batches = InvestmentWHTBatch.query.order_by(InvestmentWHTBatch.uploaded_at.desc()).all()
     return render_template("tax_investment_wht.html", investments=rows, batches=batches, upcoming_count=len(upcoming),
         matured_outstanding_count=len(matured_outstanding), total_expected=total_expected,
         total_actual=total_actual, total_outstanding=total_outstanding, today=today)
@@ -2149,30 +2180,27 @@ def tax_investment_wht_edit(investment_id):
     if not _tax_required(): return redirect(url_for("home"))
     item = InvestmentWHT.query.get_or_404(investment_id)
     try:
-        bank_name = request.form.get("bank_name", "").strip()
-        bank_tin = request.form.get("bank_tin", "").strip()
+        bank = request.form.get("bank_name", "").strip()
+        tin = request.form.get("bank_tin", "").strip()
         principal = _amount(request.form.get("amount_invested"))
-        annual_rate = Decimal(request.form.get("annual_rate", "0"))
+        rate = _amount(request.form.get("annual_rate"))
         nature = request.form.get("nature", "Fixed Deposit").strip()
-        start_date = datetime.strptime(request.form.get("start_date"), "%Y-%m-%d").date()
-        maturity_date = datetime.strptime(request.form.get("maturity_date"), "%Y-%m-%d").date()
+        start_date = datetime.strptime(request.form.get("start_date", ""), "%Y-%m-%d").date()
+        maturity_date = datetime.strptime(request.form.get("maturity_date", ""), "%Y-%m-%d").date()
         confirmed_raw = request.form.get("confirmed_interest", "").strip()
-        confirmed = Decimal(confirmed_raw) if confirmed_raw else None
-        if not bank_name or not bank_tin or principal <= 0 or annual_rate < 0 or annual_rate > 100:
-            raise ValueError("Enter valid bank details, principal and annual interest rate.")
-        days, calculated, expected_wht = _investment_wht_calculation(principal, annual_rate, start_date, maturity_date, confirmed)
-        duplicate_key = _investment_duplicate_key(bank_tin, principal, nature, start_date, maturity_date)
-        duplicate = InvestmentWHT.query.filter(InvestmentWHT.duplicate_key == duplicate_key, InvestmentWHT.id != item.id).first()
-        if duplicate: raise ValueError("Another investment with the same bank TIN, principal, nature and dates already exists.")
-        item.bank_name, item.bank_tin, item.amount_invested = bank_name, bank_tin, principal
-        item.nature, item.start_date, item.maturity_date, item.annual_rate = nature, start_date, maturity_date, annual_rate
-        item.confirmed_interest, item.calculated_interest, item.expected_wht = confirmed, calculated, expected_wht
-        item.duplicate_key = duplicate_key
-        item.updated_at = datetime.utcnow()
-        db.session.commit()
-        flash("Investment details updated and expected interest/WHT recalculated. Existing actual WHT and certificate details were preserved.", "success")
+        confirmed = _amount(confirmed_raw) if confirmed_raw else None
+        if not bank or not tin: raise ValueError("Bank Name and TIN Number are required.")
+        if principal <= 0 or rate < 0 or rate > 100: raise ValueError("Enter a positive principal and annual rate between 0 and 100.")
+        _, calculated, expected = _investment_wht_calculation(principal, rate, start_date, maturity_date, confirmed)
+        key = _investment_duplicate_key(tin, principal, nature, start_date, maturity_date)
+        duplicate = InvestmentWHT.query.filter(InvestmentWHT.duplicate_key == key, InvestmentWHT.id != item.id).first()
+        if duplicate: raise ValueError("Another investment already has the same registration details.")
+        item.bank_name=bank[:180]; item.bank_tin=tin[:40]; item.amount_invested=principal; item.nature=nature[:80]
+        item.start_date=start_date; item.maturity_date=maturity_date; item.annual_rate=rate
+        item.calculated_interest=calculated; item.confirmed_interest=confirmed; item.expected_wht=expected; item.duplicate_key=key
+        db.session.commit(); flash("Investment registration updated. Existing reconciliation and certificate records were retained.", "success")
     except Exception as exc:
-        db.session.rollback(); flash(f"Investment update failed: {exc}", "danger")
+        db.session.rollback(); flash(f"Investment was not updated: {exc}", "danger")
     return redirect(url_for("tax_investment_wht"))
 
 
@@ -2181,13 +2209,15 @@ def tax_investment_wht_delete(investment_id):
     if not _tax_required(): return redirect(url_for("home"))
     item = InvestmentWHT.query.get_or_404(investment_id)
     try:
-        # Remove dependent reminder logs first to avoid FK failures.
         InvestmentWHTEmailLog.query.filter_by(investment_id=item.id).delete(synchronize_session=False)
+        PortalEmailLog.query.filter_by(module="investment_wht", reference_id=item.id).delete(synchronize_session=False)
+        if item.batch_id:
+            batch = db.session.get(InvestmentWHTBatch, item.batch_id)
+            if batch: batch.imported_rows = max(0, (batch.imported_rows or 0) - 1)
         db.session.delete(item); db.session.commit()
-        flash("Selected investment and its reminder logs were deleted. Other investments were retained.", "success")
-    except Exception:
-        db.session.rollback(); logger.exception("Investment delete failed for %s", investment_id)
-        flash("Investment could not be deleted. No changes were committed.", "danger")
+        flash("Investment and its associated reminder email logs were deleted. Other registrations and batches were preserved.", "success")
+    except Exception as exc:
+        db.session.rollback(); flash(f"Investment could not be deleted: {exc}", "danger")
     return redirect(url_for("tax_investment_wht"))
 
 
@@ -2196,15 +2226,16 @@ def tax_investment_wht_delete_batch(batch_id):
     if not _tax_required(): return redirect(url_for("home"))
     batch = InvestmentWHTBatch.query.get_or_404(batch_id)
     try:
-        ids = [x[0] for x in db.session.query(InvestmentWHT.id).filter_by(batch_id=batch.id).all()]
+        batch_items = InvestmentWHT.query.filter_by(batch_id=batch.id).all()
+        ids = [x.id for x in batch_items]
         if ids:
             InvestmentWHTEmailLog.query.filter(InvestmentWHTEmailLog.investment_id.in_(ids)).delete(synchronize_session=False)
+            PortalEmailLog.query.filter(PortalEmailLog.module == "investment_wht", PortalEmailLog.reference_id.in_(ids)).delete(synchronize_session=False)
             InvestmentWHT.query.filter(InvestmentWHT.id.in_(ids)).delete(synchronize_session=False)
         db.session.delete(batch); db.session.commit()
-        flash(f"Imported investment batch #{batch_id} deleted. Manually registered investments and other batches were preserved.", "success")
-    except Exception:
-        db.session.rollback(); logger.exception("Investment batch delete failed for %s", batch_id)
-        flash("Investment batch could not be deleted. No changes were committed.", "danger")
+        flash(f"Imported batch deleted, including {len(ids)} investment(s) and their reminder logs. Manual registrations and other batches were preserved.", "success")
+    except Exception as exc:
+        db.session.rollback(); flash(f"Batch could not be deleted: {exc}", "danger")
     return redirect(url_for("tax_investment_wht"))
 
 
@@ -2598,30 +2629,6 @@ def tax_vat_control_upload():
         return redirect(url_for("tax_vat_control"))
 
 
-@app.route("/tax-vat-control/upload/<int:upload_id>/delete", methods=["POST"])
-def tax_vat_control_delete_upload(upload_id):
-    if not _tax_required(): return redirect(url_for("home"))
-    upload = VatLedgerUpload.query.get_or_404(upload_id)
-    filename = upload.filename
-    entry_count = VatLedgerEntry.query.filter_by(upload_id=upload.id).count()
-    try:
-        # Delete only rows belonging to this source batch. Do not touch manual movements,
-        # VAT returns, other imports or unrelated CETTP records.
-        VatLedgerEntry.query.filter_by(upload_id=upload.id).delete(synchronize_session=False)
-        VatLedgerPeriodBalance.query.filter_by(upload_id=upload.id).delete(synchronize_session=False)
-        db.session.delete(upload)
-        db.session.add(VatAuditLog(actor=_vat_actor_name(), action="ERP VAT ledger batch deleted",
-            record_type="upload", record_id=upload_id,
-            details=f"Deleted batch {filename}; {entry_count} imported transaction rows removed."))
-        db.session.commit()
-        flash(f"VAT ledger batch #{upload_id} deleted. {entry_count:,} imported transaction rows were removed; other batches and manual records were preserved.", "success")
-    except Exception:
-        db.session.rollback()
-        logger.exception("VAT ledger batch deletion failed for upload %s", upload_id)
-        flash("The VAT ledger batch could not be deleted. No changes were committed.", "danger")
-    return redirect(url_for("tax_vat_control"))
-
-
 @app.route("/tax-vat-control/entry/<int:entry_id>/classify", methods=["POST"])
 def tax_vat_control_classify(entry_id):
     if not _tax_required(): return redirect(url_for("home"))
@@ -2811,7 +2818,7 @@ def tax_vat_control_export():
 
 @app.route("/health")
 def health():
-    return jsonify(status="ok", application="CETTP Tax Compliance & Cancellation Tracking Portal", version="3.2.0-complete-enhancement")
+    return jsonify(status="ok", application="CETTP Tax Compliance & Cancellation Tracking Portal", version="3.0.0-vat-control")
 
 @app.context_processor
 def inject_globals():

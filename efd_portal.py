@@ -31,37 +31,6 @@ MAX_CONTENT_LENGTH = 15 * 1024 * 1024  # 15 MB
 
 efd_bp = Blueprint("efd_portal", __name__, template_folder=str(TEMPLATE_DIR))
 
-EFDInvoiceRecord = None  # injected by app.py after SQLAlchemy models are declared
-
-
-def _history_model():
-    if EFDInvoiceRecord is None:
-        raise RuntimeError("Shared CETTP EFD storage has not been initialized.")
-    return EFDInvoiceRecord
-
-
-def _save_history(filename, processed_filename, verification_code, receipt_time, processed_data,
-                  invoice_reference=None, policy_number=None, customer_name=None, batch_id=None):
-    model = _history_model()
-    db = current_app.extensions["sqlalchemy"]
-    record = model(
-        created_at=datetime.utcnow(),
-        process_date=date.today(),
-        filename=filename,
-        processed_filename=processed_filename,
-        verification_code=verification_code,
-        receipt_time=receipt_time,
-        invoice_reference=(invoice_reference or "").strip() or None,
-        policy_number=(policy_number or "").strip() or None,
-        customer_name=(customer_name or "").strip() or None,
-        batch_id=batch_id,
-        processed_data=processed_data,
-    )
-    db.session.add(record)
-    db.session.commit()
-    return record
-
-
 
 def get_db():
     conn = sqlite3.connect(DATABASE)
@@ -92,9 +61,6 @@ def init_db():
                 created_at TEXT NOT NULL
             )
         """)
-        columns = {row["name"] for row in conn.execute("PRAGMA table_info(batch_staging)").fetchall()}
-        if "invoice_reference" not in columns:
-            conn.execute("ALTER TABLE batch_staging ADD COLUMN invoice_reference TEXT")
 
 
 def allowed_file(filename):
@@ -241,10 +207,19 @@ def britam_logo():
 
 @efd_bp.route("/", methods=["GET"])
 def dashboard():
-    model = _history_model()
-    total = model.query.count()
-    today = model.query.filter_by(process_date=date.today()).count()
-    recent = model.query.order_by(model.id.desc()).limit(8).all()
+    with get_db() as conn:
+        total = conn.execute(
+            "SELECT COUNT(*) AS n FROM processing_history"
+        ).fetchone()["n"]
+        today = conn.execute(
+            "SELECT COUNT(*) AS n FROM processing_history WHERE process_date = ?",
+            (date.today().isoformat(),)
+        ).fetchone()["n"]
+        recent = conn.execute(
+            "SELECT created_at, filename, verification_code "
+            "FROM processing_history ORDER BY id DESC LIMIT 8"
+        ).fetchall()
+
     return render_template("efd_portal/index.html", total=total, today=today, recent=recent)
 
 
@@ -253,9 +228,6 @@ def process_invoice():
     uploaded = request.files.get("invoice")
     verification_code = (request.form.get("verification_code") or "").strip()
     raw_time = request.form.get("verification_time", "")
-    invoice_reference = request.form.get("invoice_reference", "").strip()
-    policy_number = request.form.get("policy_number", "").strip()
-    customer_name = request.form.get("customer_name", "").strip()
 
     if not uploaded or not uploaded.filename:
         flash("Please select a Word invoice (.docx).", "error")
@@ -284,11 +256,21 @@ def process_invoice():
 
             build_processed_invoice(input_path, output_path, verification_code, receipt_time)
 
-            processed_data = output_path.read_bytes()
-            _save_history(original_filename, output_name, verification_code, receipt_time, processed_data,
-                          invoice_reference, policy_number, customer_name)
+            with get_db() as conn:
+                conn.execute("""
+                    INSERT INTO processing_history
+                    (created_at, process_date, filename, verification_code, receipt_time)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (
+                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    date.today().isoformat(),
+                    original_filename,
+                    verification_code,
+                    receipt_time,
+                ))
+
             return send_file(
-                io.BytesIO(processed_data),
+                output_path,
                 as_attachment=True,
                 download_name=output_name,
                 mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -317,7 +299,7 @@ def batch_processing():
     if request.method == "GET":
         with get_db() as conn:
             items = conn.execute(
-                "SELECT id, original_filename, verification_code, receipt_time, created_at, invoice_reference "
+                "SELECT id, original_filename, verification_code, receipt_time, created_at "
                 "FROM batch_staging WHERE batch_id = ? ORDER BY id", (batch_id,)
             ).fetchall()
         return render_template("efd_portal/batch.html", items=items, batch_count=len(items))
@@ -355,9 +337,6 @@ def batch_processing():
         uploaded = request.files.get("invoice")
         code = (request.form.get("verification_code") or "").strip()
         raw_time = (request.form.get("verification_time") or "").strip()
-        invoice_reference = (request.form.get("invoice_reference") or "").strip()
-        policy_number = (request.form.get("policy_number") or "").strip()
-        customer_name = (request.form.get("customer_name") or "").strip()
         if not uploaded or not uploaded.filename:
             flash("Select one Word invoice (.docx) to add.", "error")
             return redirect(url_for("efd_portal.batch_processing"))
@@ -398,9 +377,9 @@ def batch_processing():
         with get_db() as conn:
             conn.execute("""
                 INSERT INTO batch_staging
-                (batch_id, original_filename, stored_path, verification_code, receipt_time, created_at, invoice_reference)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (batch_id, original_name, str(stored_path), code, receipt_time, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), invoice_reference))
+                (batch_id, original_filename, stored_path, verification_code, receipt_time, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (batch_id, original_name, str(stored_path), code, receipt_time, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
         flash(f"{original_name} added with its EFD details. You can now add the next invoice.", "success")
         return redirect(url_for("efd_portal.batch_processing"))
 
@@ -432,8 +411,7 @@ def batch_processing():
                     if not source_path.is_file():
                         raise ValueError("Staged invoice file is missing. Please add the invoice again.")
                     verification_url = build_processed_invoice(source_path, output_path, code, receipt_time)
-                    successful_history.append((original_name, output_name, code, receipt_time, output_path.read_bytes(),
-                                                item["invoice_reference"], None, None))
+                    successful_history.append((original_name, code, receipt_time))
                 except Exception as exc:
                     current_app.logger.exception("Batch invoice processing failed for %s", original_name)
                     result = "Failed"
@@ -462,16 +440,13 @@ def batch_processing():
                 archive.write(report_path, report_path.name)
 
         if successful_history:
-            model = _history_model()
-            db = current_app.extensions["sqlalchemy"]
-            for original_name, output_name, code, receipt_time, processed_data, invoice_ref, policy_no, customer in successful_history:
-                db.session.add(model(
-                    created_at=datetime.utcnow(), process_date=date.today(), filename=original_name,
-                    processed_filename=output_name, verification_code=code, receipt_time=receipt_time,
-                    invoice_reference=invoice_ref or None, policy_number=policy_no or None,
-                    customer_name=customer or None, batch_id=batch_id, processed_data=processed_data
-                ))
-            db.session.commit()
+            with get_db() as conn:
+                for original_name, code, receipt_time in successful_history:
+                    conn.execute("""
+                        INSERT INTO processing_history
+                        (created_at, process_date, filename, verification_code, receipt_time)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), date.today().isoformat(), original_name, code, receipt_time))
         # The ZIP is now self-contained; remove this staged batch after successful packaging.
         with get_db() as conn:
             conn.execute("DELETE FROM batch_staging WHERE batch_id = ?", (batch_id,))
@@ -487,18 +462,12 @@ def batch_processing():
 
 @efd_bp.route("/history", methods=["GET"])
 def history():
-    model = _history_model()
-    rows = model.query.order_by(model.created_at.desc()).limit(250).all()
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT id, created_at, filename, verification_code, receipt_time
+            FROM processing_history ORDER BY id DESC LIMIT 250
+        """).fetchall()
     return render_template("efd_portal/history.html", rows=rows)
-
-
-@efd_bp.route("/history/<int:record_id>/download")
-def download_processed_invoice(record_id):
-    model = _history_model()
-    record = model.query.get_or_404(record_id)
-    return send_file(io.BytesIO(record.processed_data), as_attachment=True,
-                     download_name=record.processed_filename,
-                     mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
 
 @efd_bp.app_errorhandler(413)
