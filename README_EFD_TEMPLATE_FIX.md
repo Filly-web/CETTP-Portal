@@ -1,12 +1,7 @@
-# EFD template fix — deployment notes
+# V3.3.1 — Email Logs schema repair
 
-The EFD portal's templates are explicitly namespaced to prevent collisions with CETTP templates of the same name.
-
-- Dashboard: `templates/efd_portal/index.html`
-- Processing history: `templates/efd_portal/history.html`
-
-Render settings (assuming `app.py` defines `app` at repository root):
-- Build command: `pip install -r requirements.txt`
-- Start command: `gunicorn app:app`
-
-Do not change the existing database URL or create a new service for this fix. Back up existing databases before replacing files. After deployment, test Initiator login, Tax Compliance login, EFD invoice generation, EFD history, and Back to CETTP navigation.
+- Added an idempotent PostgreSQL migration for `portal_email_logs.module`.
+- Backfills existing records with `general` before enforcing `NOT NULL`.
+- Adds the `module` index expected by the SQLAlchemy model.
+- Includes production migration and verification instructions.
+- Retains Yahoo SMTP and the existing CETTP modules; no production data reset.

@@ -1,137 +1,39 @@
-# Britam CETTP V3.3.0 – Tax & Compliance Portal
+# CETTP V3.0.1 – VAT Control Account
 
-Integrated internal portal for cancellation and endorsement tracking plus VAT and WHT reconciliation workflows.
+## Location
+The VAT Control Account is a Tax Compliance Workspace tool. It is available from the Tax Compliance sidebar and the Tax Compliance dashboard. It is not a separate portal and is not integrated with the Fixed Asset Governance (FAR) application.
 
-## Features
-- Initiator workflow for new cancellation/endorsement cases.
-- Tax Compliance workspace protected by a configurable access code (default development code: `4823`).
-- Tracking of original invoices, adjustment/VAT amounts, credit notes, replacement invoices, adjustment references, TRA status and acknowledgement.
-- Workflow statuses, search/filter, case detail and audit history.
-- Dashboard metrics and Chart.js visualizations.
-- VAT and WHT reconciliation workspace with CSV/XLSX imports, sample templates, period filters, book-vs-TRA totals, row-level variances and deletion of imported rows.
-- Generic reconciliation columns support VAT streams (e.g. General/Medical premiums, facultative inwards, commission receivable, fronted business, salvage and fees) and WHT streams (e.g. agents commissions and other payees) using the Source and Category fields.
-- SQLite by default for development; PostgreSQL via `DATABASE_URL` in production.
-- Flask-WTF CSRF protection, SQLAlchemy ORM and Flask-Migrate support.
+## ERP ledger import
+- Accepts an `.xlsx` ERP Detailed Account Analysis workbook containing both worksheets named `330101` and `330107`.
+- Reads the monthly `Period`, opening balance, closing balance (where the ERP report provides a numeric value), and transaction rows.
+- Imports GL date, transaction number, transaction date, creation date, posting date, document number, batch, supplier/customer, source, transaction type, transaction description, entered amount/currency, accounted amount/currency and initiator.
+- Uses the report's monthly Period section for tax-period allocation. This is deliberate because some GL dates in the sample are in a prior calendar month while appearing in a later monthly ERP reporting section.
+- Retains the original uploaded workbook in the application database and stores a SHA-256 fingerprint to block an exact duplicate upload. New versions are retained as separate batches; earlier batches are not overwritten.
 
-## Local run
-```bash
-python -m venv .venv
-# Windows: .venv\Scripts\activate
-# macOS/Linux: source .venv/bin/activate
-pip install -r requirements.txt
-set FLASK_APP=app.py
-flask run
-```
-Open http://127.0.0.1:5000.
+## VAT account and classification
+- Calculates the VAT liability effect as the negative of the signed TZS accounted amount from the ERP ledger. This matches the sample's sign convention: 330101 output VAT credit balances are negative and 330107 recoverable VAT debit balances are positive.
+- Automatically suggests classifications for output VAT, input VAT, VAT payments, increasing/decreasing adjustments, imported-services VAT and import VAT credits.
+- Restricts automatic payment classification to 330101 so ordinary supplier payment descriptions in 330107 are not misidentified as payments to TRA.
+- Leaves ambiguous manual VAT journals as `Unclassified – review required`. Unclassified movements remain separately visible in the account until Tax Compliance reviews them.
+- Allows Tax Compliance to reclassify each ledger row and record a review note. The reviewer and review timestamp are retained.
+- Allows manual movements for increasing/decreasing adjustments, imported-service output/input VAT, import VAT credit, VAT payments, refunds and other increases/decreases. Supporting documents can be attached.
+- Provides a TRA VAT return register for output tax, input tax, adjustments, declared net payable/(credit), submission date, return reference and supporting evidence.
+- Generates a monthly VAT control account, a monthly movement summary and an Excel export with VAT Control Account, ERP Transactions, Manual Movements, TRA VAT Returns and VAT Audit Trail worksheets.
 
-## Render deployment
-1. Push this folder to a Git repository.
-2. Create a Render Blueprint from `render.yaml`.
-3. Set `TAX_ACCESS_CODE` in Render environment variables. For production, use a strong secret code rather than the development default.
-4. Confirm the managed PostgreSQL database is attached and `DATABASE_URL` is set.
-5. Deploy and test `/health`, initiation, tax access, updates and history.
+## Important controls
+- A payment already captured in 330101 should not be entered again as a manual payment. Manual payments are for amounts not represented in the imported ledger.
+- Excluded non-VAT postings are shown separately and create a visible reconciliation difference against the combined ERP closing balances; they are not silently removed from the source history.
+- The application does not automatically decide whether input VAT is legally allowable. Tax Compliance must review invoice validity, restrictions, tax period, imported-service treatment, adjustments and supporting evidence before using the output for a return or TRA audit.
+- The system compares calculated closing balances with combined ERP closing balances where both ledger closing figures are numeric. The ERP sample masks some 330101 monthly closing balances with `*****`; those months are marked as unavailable rather than guessed.
+- The application creates new VAT tables through the existing `db.create_all()` startup process. It does not alter existing CETTP tables, change the database URL, require a database migration, or change Render service configuration.
 
-## Important production controls
-- The requested no-username/password design is implemented as role selection plus a tax access code. This is a lightweight access gate, not user authentication. Anyone who knows the code can enter Tax Compliance and actions are not attributable to verified individuals.
-- Do not use the default code `4823` in production. Set `TAX_ACCESS_CODE` through Render environment variables.
-- Set a strong random `SECRET_KEY`; keep it private.
-- For stronger auditability, add individual SSO/user accounts, role-based authorization, rate limiting, security monitoring, and a documented retention policy before handling sensitive customer/policy information.
-- Database migrations: `flask db init` (once), `flask db migrate -m "initial schema"`, `flask db upgrade`. The application currently calls `db.create_all()` on startup for simple first-run development; for controlled production schema evolution, remove that startup call after initializing migrations and use release/deploy migration commands.
+## Database tables added
+- `vat_ledger_upload`
+- `vat_ledger_entry`
+- `vat_ledger_period_balance`
+- `vat_manual_movement`
+- `vat_return_record`
+- `vat_audit_log`
 
-
-## Visual design refresh
-The interface now uses a branded blue header, navy workspace sidebar, colorful KPI cards, a blue welcome banner, colored charts, polished forms, responsive layouts and updated navigation styling. The UI uses Bootstrap 5 and Chart.js via CDN, so an internet connection is required for those assets unless they are self-hosted.
-
-## Reconciliation upload template
-Download the VAT or WHT CSV template from the reconciliation screen. Required columns are `period`, `source`, `book_amount`, and `tra_amount`. Optional columns are `reference`, `counterparty`, `category`, and `notes`. XLSX uploads read the first worksheet and first row as column headers. Amounts are interpreted as TZS and row variance is Books minus TRA. Uploads append data; check for duplicates before importing.
-
-## Security and tax review
-This module provides reconciliation calculations and exception visibility, not automatic confirmation of TRA records or a substitute for tax review. Restrict access, protect the access code and secret key, back up the database, and verify source data before making filings.
-
-
-## Premium Register Cancellation & Endorsement Tracker (added to the V1.1 base)
-
-Tax Compliance users can open **Register Cancellations** from the sidebar and upload an AIMS Premium Register in standard, unprotected `.xlsx` or `.csv` format. The importer searches for the `POLICY NO` and `GROSS PREMIUM` headings, then groups positive and negative signed premiums by policy number. Negative rows are classified as: exact positive amount match, different positive amount on the same policy (review as a potential endorsement), or pure cancellation where no positive row exists for that policy.
-
-Each detected negative transaction is retained in the tracker. Tax Compliance should record the reason, TRA status and TRA reference. The **Auto-fill matched figures / Import to CETTP** action creates linked records in the existing case workflow; selected rows are imported when checkboxes are selected, otherwise all unimported rows are imported. The Excel export includes the cancellation reason, classification, TRA status/reference and CETTP case reference.
-
-**Important:** pairing is a suggested control based on policy number and premium amount; verify it against source documents before submitting a cancellation or endorsement to TRA. The uploaded Premium Register previously provided could not be opened by standard XLSX tools (it may be encrypted or not a standard XLSX). Save an accessible unprotected workbook or CSV export for importing. This enhancement does not change the V1.1 database configuration or add PostgreSQL persistence changes.
-
-
-## Monthly Premium Register tracking (V1.1 enhancement)
-
-In Tax Compliance, open **Premium Register Cancellations & Endorsements**. Select the reconciliation month and upload that month's AIMS Premium Register. Every upload is retained as a separate batch with a monthly history. Filter the register by month, export that month to Excel, or export all tracked months. The Excel report includes reporting month, matching classification, cancellation/endorsement reason, TRA status/reference and CETTP case reference. Re-uploading a month does not overwrite earlier batches.
-
-See `CHANGELOG_V1_1_MONTHLY_REGISTER.md` for the enhancement notes. This release is based on the V1.1 enhancement package and does not intentionally add the V1.2 persistence changes.
-
-### Duplicate prevention for cancellations and endorsements
-The cancellation/endorsement workflow checks for repeated actions across initiator-created cases and Premium Register imports. It normalizes policy numbers and compares action type, date, document/invoice number and absolute adjustment amount. Exact duplicates are blocked or skipped with an alert. Where the policy already has related activity but the date/document/amount differs, the system raises a review warning rather than blocking it, because a policy may legitimately have more than one endorsement.
-
-### Case and monthly tracking administration
-- Tax Compliance can delete an individual case from the Case Register; linked Premium Register tracker rows are deleted with it. Deletion is permanent and requires confirmation.
-- Tax Compliance can delete an individual Premium Register tracking row or delete a selected monthly upload batch from the monthly upload history.
-- Deleting a batch removes its tracker rows and the CETTP cases that were created by that register import. Cases originally raised by an Initiator are preserved; their tracker links are removed with the batch.
-- The Case Register provides an Excel export. Current search, workflow status, and request type filters are applied to the export.
-- Destructive actions use POST requests protected by Flask-WTF CSRF.
-
-
-## Centralized Yahoo SMTP email service (V3.3.0)
-
-All outbound CETTP email is routed through one central delivery function. It is used for new cancellation/endorsement case notifications, Investment WHT maturity and certificate reminders, and the email configuration test. The **Email Settings & Logs** workspace shows the active non-secret SMTP settings, sends a test message, and displays the latest 100 delivery attempts in the central `portal_email_logs` table. Existing case-level and Investment WHT reminder logs are retained for their respective workflows.
-
-Configure these variables in the existing Render service environment:
-
-| Variable | Purpose |
-|---|---|
-| `SMTP_HOST` | Yahoo SMTP host; set to `smtp.mail.yahoo.com`. |
-| `SMTP_PORT` | `587` for STARTTLS (or `465` for implicit TLS). |
-| `SMTP_USERNAME` | `temporarytin2026@yahoo.com`. |
-| `SMTP_PASSWORD` | Yahoo-generated App Password. Store only as a Render secret; never commit it. |
-| `SMTP_FROM` | Approved sender address, normally `temporarytin2026@yahoo.com`. |
-| `SMTP_TIMEOUT` | Optional connection timeout in seconds; default 15, allowed range 5–60. |
-| `CETTP_TAX_COMPLIANCE_EMAIL` | Approved recipient(s), comma/semicolon separated. |
-| `CETTP_INVESTMENT_WHT_EMAIL` | Optional Investment WHT recipient override; falls back to `CETTP_TAX_COMPLIANCE_EMAIL`. |
-| `CETTP_EMAIL_TEST_TO` | Optional default test recipient. |
-| `CETTP_BASE_URL` | Public CETTP base URL used in case notification links. |
-
-Use STARTTLS on port 587. The application does not embed any Yahoo App Password. A connection timeout is recorded with its exception type and detail in the central email log; email failure does not roll back case submission or other CETTP work. Render Free networking may still prevent outbound SMTP connections; this package improves diagnostics but cannot override hosting-provider network restrictions.
-
-Open **Email Settings & Logs** from the Tax Compliance sidebar to test delivery and inspect outcomes. All existing database tables and production records are preserved; startup `db.create_all()` creates the new central email audit table if it is not already present and does not drop or reset tables.
-
-
-## In-app Tax Compliance notifications (no email required)
-
-New cancellation and endorsement requests now create an in-portal notification after the case is saved. Tax Compliance can view alerts from the bell icon or the **Notifications** sidebar link after logging in. Each alert shows the case reference, request type, policy, customer, initiator, and submission timestamp. The notification list distinguishes **Unread** from **Read** items; opening a notification records it as read for the current Tax Compliance actor, and **Mark all as read** is also available. The unread badge updates on page loads.
-
-These notifications work without configuring Microsoft 365 or any email address. Email delivery remains optional and separate. The notification and per-actor read receipt records are created in the same application database as the other CETTP records. For a deployed database, ensure the app's startup `db.create_all()` can create the two new tables (`in_app_notification` and `in_app_notification_read`); for stricter production change control, create them through the project's migration process before deploying.
-
-
-## Integrated EFD-to-Invoice Portal
-
-The home page now offers three entry options: Initiator Workspace, Tax Compliance Workspace, and EFD-to-Invoice Portal. The EFD utility is mounted under `/efd-invoice/` and does not replace CETTP case workflows. It processes Word `.docx` invoice templates, adds TRA verification details and a QR code, and records processing history in a separate SQLite database.
-
-Set `EFD_PORTAL_DATA_DIR` to a persistent writable directory if EFD processing history must survive redeployments. Without a persistent disk or external database, SQLite history stored on an ephemeral host filesystem can be lost. This EFD utility currently has no separate login, so restrict access using the organisation's approved access controls before exposing it outside the intended internal users.
-
-
-## Tax Compliance Calendar & Monitoring (V2.4)
-The portal now includes a Tax Compliance Calendar for manually maintained filing and payment obligations. Tax Compliance can create/edit obligations, assign owners, track due dates/statuses, attach evidence, view audit history, and export the register to CSV. Dates are deliberately not hard-coded: validate each deadline against current TRA requirements. Background email/push reminders and automatic recurring-period generation are not part of this release. The three new calendar tables are created by the existing `db.create_all()` startup call; back up the production database before deployment.
-
-## Tax Compliance Calendar V2.5
-See `CHANGELOG_V2_5_COMPLIANCE_CALENDAR_WORKSPACE_RECURRING_MANUAL.md` for the workspace integration, recurring deadline schedule and manual one-time deadline improvements.
-
-## V2.6 calendar display update
-
-The Tax Compliance Calendar now opens on the current month and shows only obligations due in that month. Use Previous month / Next month to review other periods. Dashboard counters are scoped to the selected month. Monthly VAT obligations are separated into TRA VAT Return and ZRA VAT Return, both configured for the 20th. Existing recurring generic VAT rows are re-labelled as TRA VAT during schedule generation to avoid duplication. No schema migration is required.
-
----
-
-
-## CETTP V3.0.0 – VAT Control Account
-
-The Tax Compliance Workspace now includes a VAT Control Account for ERP ledgers 330101 (Output VAT) and 330107 (VAT Recoverable). Upload one ERP `.xlsx` workbook containing both account worksheets. The module reads monthly report periods, opening balances and transaction details, suggests VAT classifications, records manual adjustments/imported-service VAT/import VAT/payments, captures TRA VAT return figures and exports the final account to Excel.
-
-See `README_V3_0_0_VAT_CONTROL_ACCOUNT.md` for user instructions and `CHANGELOG_V3_0_0_VAT_CONTROL_ACCOUNT.md` for controls, sign convention, data retention and deployment details.
-
-## Investment WHT Credits (V3.1.0)
-
-The Tax Compliance Workspace includes an Investment WHT Credits register for bank deposits and other investments. It supports individual registration, Excel batch upload, actual-days/365 expected interest calculations with a bank-confirmed override, 10% expected WHT, maturity-based outstanding WHT receivable, actual WHT reconciliation, TRA certificate attachments, and scheduled email reminders. See `README_INVESTMENT_WHT_CREDITS.md` and `CHANGELOG_V3_1_0_INVESTMENT_WHT_CREDITS.md` for user instructions and reminder deployment configuration.
+## Version
+`3.0.1-vat-control`

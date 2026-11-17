@@ -1,13 +1,16 @@
-# CETTP V2.3 — EFD Template Namespace Fix
+# V1.6 — Initiator workspace and tracking
 
-## Issue
-The EFD history route rendered `history.html`, which could resolve to CETTP's case-history template. That template expects a `case` variable and caused `jinja2.exceptions.UndefinedError: 'case' is undefined`.
+- Adds a dedicated Initiator dashboard with personal request counters and recent cases.
+- Adds a private My Updates inbox with read/unread status and direct links to the related case.
+- Creates Initiator notifications when Tax Compliance changes workflow status or adds review notes, including returned-for-clarification and final outcomes.
+- Scopes Initiator case listing and exports to records whose Initiator identity matches the email used for the current session.
+- Enforces case-level ownership checks for case detail, attachment upload and attachment download routes.
+- Adds date-range and overdue filters to the case list; Initiators can filter returned and overdue cases using the existing status/filter controls.
+- Tax Compliance retains the broader case register and approval/status controls.
 
-## Fix
-- EFD history explicitly renders `efd_portal/history.html`.
-- EFD dashboard explicitly renders `efd_portal/index.html`.
-- The EFD processing history query and its records are unchanged.
-- CSRF protection and the Back to CETTP Portal navigation remain in place.
+## Notes
 
-## Deployment
-Update the existing repository/service with the ZIP contents. Keep the existing Render service, database URL, and environment variables unchanged. Back up existing data first. Verify the EFD dashboard, history, invoice generation, Initiator login, and Tax Compliance login after deployment.
+- Initiator access remains email-only for the pilot and does not verify email ownership. Do not treat the entered email as authenticated identity in production.
+- The existing database initialization (`db.create_all()`) creates the new `initiator_notification` table for new deployments. For production databases, apply an approved migration/initialization process and back up first.
+- Draft saving and editing are not yet implemented as a persisted workflow; the dashboard displays a Drafts metric for compatibility but this feature should be completed before presenting drafts as available to users.
+- No WHT reconciliation module was added as part of this change.
