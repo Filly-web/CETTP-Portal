@@ -1,4 +1,4 @@
-# V3.3.1 build verification
+# V3.3.2 build verification
 
 ## Passed
 - Python source compilation (`compileall`).
@@ -13,7 +13,8 @@
 - No live PostgreSQL migration, Render deployment, full Flask integration
   test, or Yahoo SMTP connectivity test was performed.
 
-## Deployment requirement
-Run `migrations/V3_3_1_add_portal_email_logs_module.sql` against the existing
-production PostgreSQL database after taking a backup and before deploying.
-No production database changes are made by generating this ZIP.
+## V3.3.2 migration behavior
+- Application startup now runs a safe, idempotent migration after `db.create_all()`.
+- The database user needs ALTER TABLE and CREATE INDEX permissions for the one table/index repair.
+- A manual SQL fallback remains in `migrations/V3_3_1_add_portal_email_logs_module.sql`.
+- No production database changes are made by generating this ZIP; the migration runs only when the deployed application starts.

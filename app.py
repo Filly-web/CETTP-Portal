@@ -8,7 +8,7 @@ from flask_wtf.csrf import CSRFProtect
 from wtforms import StringField, SelectField, DateField, DecimalField, TextAreaField, SubmitField
 from wtforms.validators import DataRequired, Optional, Length, NumberRange
 from flask_migrate import Migrate
-from sqlalchemy import or_, func, delete
+from sqlalchemy import or_, func, delete, inspect, text
 from werkzeug.utils import secure_filename
 from io import BytesIO
 import csv, io, smtplib, ssl, logging, hashlib, hmac
@@ -2818,7 +2818,7 @@ def tax_vat_control_export():
 
 @app.route("/health")
 def health():
-    return jsonify(status="ok", application="CETTP Tax Compliance & Cancellation Tracking Portal", version="3.0.0-vat-control")
+    return jsonify(status="ok", application="CETTP Tax Compliance & Cancellation Tracking Portal", version="3.3.2-email-logs-auto-migration")
 
 @app.context_processor
 def inject_globals():
@@ -2840,8 +2840,52 @@ def inject_globals():
     return {"current_role": session.get("role"), "current_actor": session.get("actor_name"),
             "unread_notification_count": unread_notification_count, "initiator_unread_count": initiator_unread_count}
 
+def _run_safe_startup_migrations():
+    """Apply narrowly scoped, idempotent schema repairs for existing deployments.
+
+    This migration only adds the missing PortalEmailLog.module column and its
+    index. It never drops, truncates, recreates, or rewrites existing records.
+    """
+    try:
+        inspector = inspect(db.engine)
+        if not inspector.has_table("portal_email_logs"):
+            # db.create_all() should have created it; fail visibly if it did not.
+            logger.warning("Startup migration skipped: portal_email_logs table not found")
+            return
+
+        columns = {column["name"] for column in inspector.get_columns("portal_email_logs")}
+        if "module" not in columns:
+            logger.warning("Applying startup migration: adding portal_email_logs.module")
+            with db.engine.begin() as connection:
+                connection.execute(text(
+                    "ALTER TABLE portal_email_logs "
+                    "ADD COLUMN module VARCHAR(80) NOT NULL DEFAULT 'general'"
+                ))
+
+        # Keep any legacy NULL values safe if the column was previously added
+        # manually without a NOT NULL constraint.
+        with db.engine.begin() as connection:
+            connection.execute(text(
+                "UPDATE portal_email_logs SET module = 'general' WHERE module IS NULL"
+            ))
+            if db.engine.dialect.name == "postgresql":
+                connection.execute(text(
+                    "ALTER TABLE portal_email_logs ALTER COLUMN module SET NOT NULL"
+                ))
+            connection.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_portal_email_logs_module "
+                "ON portal_email_logs (module)"
+            ))
+        logger.info("Portal email log schema check completed")
+    except Exception:
+        # Do not prevent the whole portal from starting; the traceback is
+        # recorded so a failed migration can be diagnosed from Render logs.
+        logger.exception("Portal email log startup migration failed")
+
+
 with app.app_context():
     db.create_all()
+    _run_safe_startup_migrations()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=os.environ.get("FLASK_DEBUG") == "1")

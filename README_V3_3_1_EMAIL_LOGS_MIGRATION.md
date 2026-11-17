@@ -9,23 +9,24 @@ by the `PortalEmailLog` SQLAlchemy model.
 The model defines `module` as `VARCHAR(80) NOT NULL` with an index. Calling
 SQLAlchemy `create_all()` does not add missing columns to an existing table.
 
-## Required production migration
+## Automatic production schema repair (V3.3.2)
 
-Before deploying this release, take a PostgreSQL backup/snapshot, then run:
+This release now performs a narrowly scoped, idempotent schema check at
+application startup, immediately after `db.create_all()`. If the existing
+`portal_email_logs` table is missing `module`, the application adds it as
+`VARCHAR(80) NOT NULL DEFAULT 'general'`, backfills legacy NULL values, and
+creates the module index if needed. Existing email-log rows are preserved.
 
-`migrations/V3_3_1_add_portal_email_logs_module.sql`
+Before deploying, take a PostgreSQL backup/snapshot. The application database
+user must have permission to ALTER the `portal_email_logs` table and create an
+index. If it lacks those permissions, the migration failure is recorded in
+Render logs; the portal will still start, but `/tax-email` will remain
+unavailable until the schema is repaired. The manual SQL script remains
+available at `migrations/V3_3_1_add_portal_email_logs_module.sql` as a fallback.
 
-Run it against the **existing CETTP production database** using the Render
-PostgreSQL PSQL connection. The script is idempotent: it adds the column only
-if absent, fills historical rows with `general`, applies NOT NULL, and creates
-the model's index only if absent. It does not delete, truncate, recreate, or
-overwrite existing email-log records.
-
-After running it, verify that `module` is `character varying`, `is_nullable`
-is `NO`, and `rows_missing_module` is zero. Then deploy the application.
-
-If the table is not present, stop and investigate the connected database/schema;
-do not create a replacement table or reset the database as a workaround.
+After deployment, check Render logs for `Portal email log schema check
+completed`, then open `/tax-email`. If the migration fails, use the logged
+exception to identify the missing database permission or schema issue.
 
 ## Other CETTP functionality
 
