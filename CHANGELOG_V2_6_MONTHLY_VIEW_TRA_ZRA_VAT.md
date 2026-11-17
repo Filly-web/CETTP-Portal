@@ -1,7 +1,9 @@
-# V1.9 – Initiator submission transaction fix
+# V2.6 – Month-specific compliance calendar and separate TRA/ZRA VAT
 
-- Corrected Initiator-side WTForms validation: the Initiator name is derived from the email-only session and is no longer incorrectly rejected when the hidden name field is absent from the submitted form.
-- Kept the Initiator name requirement for Tax Compliance submissions.
-- Made case creation, attachment persistence, audit logging and the Tax Compliance in-app notification part of one database transaction. If any part fails, the transaction rolls back and a server-side exception is logged.
-- Kept the existing email-only Initiator entry, mandatory cancelled invoice/EFD attachment, existing workflow, database URL and environment-variable configuration.
-
+- Compliance Calendar now defaults to the current month and displays only deadlines due within that month.
+- Added previous/next month navigation. Month and year selections are retained when filtering by tax type or status.
+- Dashboard counters (due in 7 days, due today, overdue, payment pending and completed) are calculated only from obligations in the selected month.
+- Monthly VAT obligations are generated separately as TRA VAT Return and ZRA VAT Return, both due on the 20th.
+- Existing system-generated generic VAT Return records are upgraded in place to TRA VAT Return to avoid duplicate TRA VAT rows; ZRA VAT is added as a separate obligation.
+- Manual deadlines remain visible in the month in which their due date falls.
+- No new database tables or migrations are introduced.

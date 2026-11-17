@@ -1,8 +1,7 @@
-# V2.9.1 — Cancellation Tracker batch deletion fix
+# V3.3.1 — Email Logs schema repair
 
-- Changed batch deletion order to remove the batch's `CancellationTrack` rows before deleting any Premium Register-imported `Case` records.
-- Preserves Initiator-created cases, including cases linked to a tracker row.
-- Wrapped deletion in a transaction with rollback and server-side exception logging.
-- No schema migration or database URL change.
-
-Validation: Python syntax compilation and ZIP integrity check. A live Render/PostgreSQL test was not performed.
+- Added an idempotent PostgreSQL migration for `portal_email_logs.module`.
+- Backfills existing records with `general` before enforcing `NOT NULL`.
+- Adds the `module` index expected by the SQLAlchemy model.
+- Includes production migration and verification instructions.
+- Retains Yahoo SMTP and the existing CETTP modules; no production data reset.

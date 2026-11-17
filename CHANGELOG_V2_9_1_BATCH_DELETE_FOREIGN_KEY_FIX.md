@@ -1,8 +1,8 @@
-# CETTP v2.1 — EFD-to-Invoice Portal Integration
+# V2.9.1 — Cancellation Tracker batch deletion fix
 
-- Added EFD-to-Invoice as a third option on the pre-login service selection page.
-- Mounted the existing EFD invoice processing utility under `/efd-invoice/` using a Flask Blueprint to avoid route collisions with CETTP.
-- Preserved Initiator and Tax Compliance workflows and case-edit/resubmission features.
-- Added `python-docx` and `qrcode[pil]` dependencies.
-- EFD processing history remains in its own SQLite database, configurable through `EFD_PORTAL_DATA_DIR`; configure persistent storage for durable history on Render.
-- EFD utility currently has no role login; access should be restricted to approved internal users.
+- Changed batch deletion order to remove the batch's `CancellationTrack` rows before deleting any Premium Register-imported `Case` records.
+- Preserves Initiator-created cases, including cases linked to a tracker row.
+- Wrapped deletion in a transaction with rollback and server-side exception logging.
+- No schema migration or database URL change.
+
+Validation: Python syntax compilation and ZIP integrity check. A live Render/PostgreSQL test was not performed.

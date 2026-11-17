@@ -1,13 +1,18 @@
-# CETTP V2.3 — EFD Template Namespace Fix
+# CETTP V2.9.2 – Safe Premium Register Batch Deletion
 
-## Issue
-The EFD history route rendered `history.html`, which could resolve to CETTP's case-history template. That template expects a `case` variable and caused `jinja2.exceptions.UndefinedError: 'case' is undefined`.
+## Batch deletion changes
+- Replaced the previous ORM/case-deletion sequence with a database-side delete scoped to the selected upload's unique `upload_batch` key.
+- The selected `RegisterUpload` and its `CancellationTrack` rows are deleted in one database transaction.
+- CETTP `Case` records are deliberately retained. A case may be shared by another Premium Register batch or contain audit logs, attachments and notifications; batch deletion must not delete formal case history.
+- If any database operation fails, the transaction is rolled back and no partial deletion is committed.
+- Full exception details are written to the Render application log. The user receives a timestamp reference to help locate the relevant log entry.
+- Updated the confirmation prompt and success message to explain that CETTP cases are retained.
+- Updated `/health` version to `2.9.2-safe-batch-delete`.
 
-## Fix
-- EFD history explicitly renders `efd_portal/history.html`.
-- EFD dashboard explicitly renders `efd_portal/index.html`.
-- The EFD processing history query and its records are unchanged.
-- CSRF protection and the Back to CETTP Portal navigation remain in place.
+## Database and deployment safety
+- No database schema migration is included.
+- No `DATABASE_URL`, database attachment, Render service, or production data is changed by this source package.
+- No FAR module or FAR navigation is included.
 
-## Deployment
-Update the existing repository/service with the ZIP contents. Keep the existing Render service, database URL, and environment variables unchanged. Back up existing data first. Verify the EFD dashboard, history, invoice generation, Initiator login, and Tax Compliance login after deployment.
+## Regression test
+`tests/test_batch_delete.py` tests deletion against an isolated in-memory SQLite database, including a case shared by two batches. Run with `python -m unittest discover -s tests` in an environment with the requirements installed.

@@ -1,48 +1,56 @@
-# CETTP V3.0.0 – Existing Render service deployment
+# CETTP V3.3.1 — Email Logs schema repair
 
-This package is arranged with the application files at the ZIP root. In particular, `requirements.txt` contains **only pip package requirements**. Do not copy the text of this README or any changelog into `requirements.txt`.
+## What this release fixes
 
-## Deploy to the existing Render service
+The `/tax-email` page was failing with PostgreSQL `UndefinedColumn` because the
+existing `portal_email_logs` table did not contain the `module` column expected
+by the `PortalEmailLog` SQLAlchemy model.
 
-1. Back up the current production database before deploying.
-2. Extract this ZIP. The files `app.py`, `requirements.txt`, `Procfile`, `runtime.txt`, `templates/` and `static/` should be directly inside the repository root (not inside another nested `CETTP_Integrated/` directory).
-3. Update the existing GitHub repository with these files. Do not create a new Render service or a new database.
-4. In the existing Render Web Service, keep the current database attachment and environment variables unchanged. In particular, do not change `DATABASE_URL` or `SECRET_KEY`.
-5. Confirm the existing service's Root Directory is blank (repository root). Use:
-   - Build command: `pip install -r requirements.txt`
-   - Start command: `gunicorn app:app`
-6. Deploy the existing service. Check `/health` and review Render Logs after deployment.
-7. Sign in as an Initiator, create one test request with the mandatory cancelled invoice/EFD attachment, and confirm that it appears in the Tax Compliance Case Register and Notifications.
+The model defines `module` as `VARCHAR(80) NOT NULL` with an index. Calling
+SQLAlchemy `create_all()` does not add missing columns to an existing table.
 
-## What this release addresses
+## Required production migration
 
-- Initiator email is used as the Initiator username; no OTP or password is requested for Initiator entry.
-- Initiator name is taken from the login email and is not required as an editable form field.
-- Form validation errors are displayed and written to the application log rather than silently redisplaying the form.
-- Case, attachment, audit entry and Tax Compliance in-app notification are committed in one database transaction. On a database error, the transaction is rolled back and the exception is logged.
-- Tax Compliance login controls are unchanged.
-- Existing `DATABASE_URL` configuration is unchanged. No database or Render service is defined in this package.
+Before deploying this release, take a PostgreSQL backup/snapshot, then run:
 
-## Requirements file
+`migrations/V3_3_1_add_portal_email_logs_module.sql`
 
-`requirements.txt` is a plain UTF-8 list of Python dependencies, one per line. Keep explanatory notes, README text and changelogs out of this file.
+Run it against the **existing CETTP production database** using the Render
+PostgreSQL PSQL connection. The script is idempotent: it adds the column only
+if absent, fills historical rows with `general`, applies NOT NULL, and creates
+the model's index only if absent. It does not delete, truncate, recreate, or
+overwrite existing email-log records.
 
-## Important
+After running it, verify that `module` is `character varying`, `is_nullable`
+is `NO`, and `rows_missing_module` is zero. Then deploy the application.
 
-The Initiator email-only login does not verify ownership of the email address. Use it only within a controlled pilot environment. A successful code build does not by itself prove that the production database is reachable; verify one test submission in the deployed service.
+If the table is not present, stop and investigate the connected database/schema;
+do not create a replacement table or reset the database as a workaround.
 
-## V2.9.2 Premium Register batch deletion
-- This release deletes only the selected upload history row and its tracker rows.
-- Linked CETTP cases are retained to protect case workflow and audit history, including cases shared by more than one register batch.
-- A failed operation is rolled back. Check Render Logs for `Premium Register batch deletion failed` and use the timestamp reference displayed in the portal.
-- After deployment, confirm `/health` reports `3.0.0-vat-control`, then test deletion using a non-critical test upload before deleting a live batch.
+## Other CETTP functionality
 
+This release is based on the prior V3.3.0 complete release and retains its
+existing modules and workflows, including the central Yahoo SMTP configuration,
+Investment WHT Credits, and Cancellation Tracker changes. Yahoo SMTP remains
+the configured provider; no alternative email provider is introduced.
 
-## V2.9.3 foreign-key batch deletion fix
-- Deletes only the selected batch tracker rows before deleting its upload-history row.
-- Does not delete linked Case records.
-- Includes an explicit flush after child-row deletion and rolls back on failure.
+## Yahoo SMTP environment variables
 
+Configure these in the existing Render web service environment:
 
-## V3.0.0 VAT Control Account
-See `README_V3_0_0_VAT_CONTROL_ACCOUNT.md` for the VAT Control Account workflow and `CHANGELOG_V3_0_0_VAT_CONTROL_ACCOUNT.md` for its implementation details. The module adds new tables only; it does not change the existing database URL or Render service configuration.
+- `SMTP_HOST=smtp.mail.yahoo.com`
+- `SMTP_PORT=587`
+- `SMTP_USERNAME=temporarytin2026@yahoo.com`
+- `SMTP_FROM=temporarytin2026@yahoo.com`
+- `SMTP_PASSWORD` = Yahoo-generated App Password (store only in Render)
+- `CETTP_TAX_COMPLIANCE_EMAIL` = intended compliance notification recipient
+
+Keep credentials out of source control and ZIP files. The migration does not
+change SMTP connectivity or bypass provider/network timeouts.
+
+## Validation scope
+
+The release package should be checked for ZIP integrity, Python syntax, and
+Jinja template compilation. These checks do not replace deployment-time
+database verification, full Flask integration tests, or a live Yahoo SMTP
+connectivity test.

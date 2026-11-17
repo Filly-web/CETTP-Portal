@@ -1,19 +1,13 @@
-# V3.3.1 build verification
+# CETTP enhancement: overdue monitoring, reconciliation review and compact UI
 
-## Passed
-- Python source compilation (`compileall`).
-- Jinja2 parsing for all 22 HTML templates.
-- `cancellation_tracker.html` contains exactly one `scripts` block.
-- ZIP integrity check (`testzip`) passed; 78 files included.
-- The PostgreSQL migration and deployment instructions are included.
+- Added configurable overdue monitoring to the Tax Compliance dashboard. Open cases at or beyond `CETTP_OVERDUE_DAYS` are listed oldest-first; default threshold is 5 days. Closed cases are excluded.
+- Added Premium Register reconciliation summary cards for exact amount matches, different amount review cases, pure cancellations, and rows not yet linked to a CETTP case.
+- Clarified that policy/amount matching is a review suggestion and should be checked against dates, document numbers and existing cases before import.
+- Reduced general typography and button sizing for a more compact, professional interface while retaining responsive layouts.
+- No WHT reconciliation module added.
 
-## Not run / blocked
-- Existing pytest suite could not be collected because Flask is not installed
-  in the packaging runtime (`ModuleNotFoundError: No module named 'flask'`).
-- No live PostgreSQL migration, Render deployment, full Flask integration
-  test, or Yahoo SMTP connectivity test was performed.
+## Configuration
+Optional Render environment variable: `CETTP_OVERDUE_DAYS=5`. Change the value to the agreed internal follow-up threshold.
 
-## Deployment requirement
-Run `migrations/V3_3_1_add_portal_email_logs_module.sql` against the existing
-production PostgreSQL database after taking a backup and before deploying.
-No production database changes are made by generating this ZIP.
+## Deployment note
+Deploy to the existing service only after backing up the production database and merging the package changes into the currently connected source. Review any existing custom CSS/template changes before replacing files.

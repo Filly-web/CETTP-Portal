@@ -1,9 +1,6 @@
-# V1.1 enhancement — In-app Tax Compliance notifications
+# CETTP v1.8 – Initiator submission fix
 
-- Added in-app alerts when a new cancellation or endorsement request is submitted.
-- Added a Tax Compliance notification center with unread/read labels and timestamps.
-- Added per-actor read receipts, mark-one-as-read/open-case, and mark-all-as-read actions.
-- Added unread count badge to the navigation bar and sidebar.
-- In-app notifications work without an email address or Microsoft 365 configuration.
-- Email remains optional and separate; request submission is retained if email delivery is not configured or fails.
-- Added `InAppNotification` and `InAppNotificationRead` database tables through the existing `db.create_all()` startup setup.
+- Fixed Initiator case submission validation. The Initiator name field is hidden for Initiators, but was still marked required by WTForms; this caused `validate_on_submit()` to reject the form before saving the case or creating a Tax Compliance notification.
+- The application now populates the required Initiator name field from the email-only login session before validation.
+- Tax Compliance submissions continue to use the name entered in the form.
+- No database schema, database URL, hosting configuration, or WHT functionality was changed.

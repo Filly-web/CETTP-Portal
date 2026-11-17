@@ -1,24 +1,12 @@
-# Central Yahoo SMTP service (V3.3.0). Keep SMTP_PASSWORD secret; do not commit real credentials.
-SMTP_HOST=smtp.mail.yahoo.com
-SMTP_PORT=587
-SMTP_USERNAME=temporarytin2026@yahoo.com
-SMTP_PASSWORD=replace-with-Yahoo-generated-App-Password
-SMTP_FROM=temporarytin2026@yahoo.com
-SMTP_TIMEOUT=15
+# CETTP V1.1 — New Request Email Notifications
 
-# Approved notification recipient(s), comma or semicolon separated.
-CETTP_TAX_COMPLIANCE_EMAIL=
-# Optional separate recipient for Investment WHT reminders.
-CETTP_INVESTMENT_WHT_EMAIL=
-# Optional email test recipient.
-CETTP_EMAIL_TEST_TO=
+- Added an `EmailNotificationLog` database table for sent, failed and not-configured notification attempts.
+- New Initiator-submitted cancellation and endorsement cases trigger one email attempt to the shared Tax Compliance mailbox after the case is committed.
+- Added duplicate-send prevention with a unique case/event key.
+- Added Microsoft 365 SMTP submission via STARTTLS, configured only through environment variables.
+- Email failures do not undo the request; status and bounded error details are recorded for follow-up.
+- Added configurable public CETTP URL for the case link in the email.
+- Premium Register batch imports do not trigger this new-Initiator-request notification.
+- No WHT reconciliation functionality was added or changed as part of this enhancement.
 
-# Public CETTP URL, without a trailing slash
-CETTP_BASE_URL=https://your-approved-cettp-host
-
-# Existing application secrets (set strong production values)
-SECRET_KEY=replace-with-a-long-random-secret
-TAX_ACCESS_CODE=replace-with-approved-strong-access-code
-
-# Existing PostgreSQL connection (Render normally injects DATABASE_URL)
-# DATABASE_URL=postgresql://user:password@host:5432/database
+Microsoft 365 SMTP AUTH availability and credential method must be confirmed by Britam IT. If SMTP AUTH is not allowed, integrate the approved Microsoft Graph method instead.
