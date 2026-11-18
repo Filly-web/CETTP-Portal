@@ -1,8 +1,0 @@
-.env
-.venv/
-__pycache__/
-*.py[cod]
-far_governance_dev.db
-instance/
-.mypy_cache/
-.pytest_cache/
