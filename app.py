@@ -116,6 +116,7 @@ class PortalEmailLog(db.Model):
     __tablename__ = "portal_email_logs"
     id = db.Column(db.Integer, primary_key=True)
     module = db.Column(db.String(80), nullable=False, index=True)
+    event_type = db.Column(db.String(100), nullable=False, default="notification", index=True)
     event_key = db.Column(db.String(100), nullable=False, index=True)
     reference_id = db.Column(db.Integer, index=True)
     recipient = db.Column(db.String(1000), nullable=False)
@@ -586,8 +587,12 @@ def _central_send_email(module, event_key, subject, body, recipients=None, refer
     recipients = recipients or _notification_recipients()
     recipients = [str(x).strip() for x in recipients if str(x).strip()]
     recipient_label = ", ".join(recipients) if recipients else "NOT_CONFIGURED"
-    log = PortalEmailLog(module=(module or "portal")[:80], event_key=(event_key or "notification")[:100],
-        reference_id=reference_id, recipient=recipient_label[:1000], subject=(subject or "CETTP notification")[:255], status="pending", attempts=0)
+    normalized_event_key = (event_key or "notification")[:100]
+    log = PortalEmailLog(module=(module or "portal")[:80],
+        event_type=normalized_event_key,
+        event_key=normalized_event_key,
+        reference_id=reference_id, recipient=recipient_label[:1000],
+        subject=(subject or "CETTP notification")[:255], status="pending", attempts=0)
     db.session.add(log)
     try:
         db.session.flush()
@@ -3211,6 +3216,7 @@ def _run_safe_startup_migrations():
         # allowing ALTER TABLE on a populated production table.
         required_columns = {
             "module": "VARCHAR(80) NOT NULL DEFAULT 'general'",
+            "event_type": "VARCHAR(100) NOT NULL DEFAULT 'notification'",
             "event_key": "VARCHAR(100) NOT NULL DEFAULT 'legacy'",
             "reference_id": "INTEGER",
             "recipient": "VARCHAR(1000) NOT NULL DEFAULT ''",
@@ -3241,6 +3247,9 @@ def _run_safe_startup_migrations():
                 "UPDATE portal_email_logs SET module = 'general' WHERE module IS NULL"
             ))
             connection.execute(text(
+                "UPDATE portal_email_logs SET event_type = COALESCE(NULLIF(event_type, ''), event_key, 'notification') WHERE event_type IS NULL OR event_type = ''"
+            ))
+            connection.execute(text(
                 "UPDATE portal_email_logs SET event_key = 'legacy' WHERE event_key IS NULL"
             ))
             connection.execute(text(
@@ -3261,7 +3270,7 @@ def _run_safe_startup_migrations():
 
             if db.engine.dialect.name == "postgresql":
                 for column_name in (
-                    "module", "event_key", "recipient", "subject",
+                    "module", "event_type", "event_key", "recipient", "subject",
                     "status", "attempts", "created_at",
                 ):
                     connection.execute(text(
@@ -3270,6 +3279,7 @@ def _run_safe_startup_migrations():
 
             indexes = {
                 "ix_portal_email_logs_module": "module",
+                "ix_portal_email_logs_event_type": "event_type",
                 "ix_portal_email_logs_event_key": "event_key",
                 "ix_portal_email_logs_reference_id": "reference_id",
                 "ix_portal_email_logs_status": "status",
