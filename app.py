@@ -3194,45 +3194,97 @@ def inject_globals():
             "unread_notification_count": unread_notification_count, "initiator_unread_count": initiator_unread_count}
 
 def _run_safe_startup_migrations():
-    """Apply narrowly scoped, idempotent schema repairs for existing deployments.
+    """Apply additive, idempotent schema repairs for existing deployments.
 
-    This migration only adds the missing PortalEmailLog.module column and its
-    index. It never drops, truncates, recreates, or rewrites existing records.
+    portal_email_logs has evolved over several releases. SQLAlchemy create_all()
+    does not add columns to an existing table, so this migration adds every
+    model column that may be absent. Existing rows are retained and populated
+    with safe legacy defaults; no table or email-log record is deleted.
     """
     try:
         inspector = inspect(db.engine)
         if not inspector.has_table("portal_email_logs"):
-            # db.create_all() should have created it; fail visibly if it did not.
             logger.warning("Startup migration skipped: portal_email_logs table not found")
             return
 
-        columns = {column["name"] for column in inspector.get_columns("portal_email_logs")}
-        if "module" not in columns:
-            logger.warning("Applying startup migration: adding portal_email_logs.module")
-            with db.engine.begin() as connection:
-                connection.execute(text(
-                    "ALTER TABLE portal_email_logs "
-                    "ADD COLUMN module VARCHAR(80) NOT NULL DEFAULT 'general'"
-                ))
+        # Definitions intentionally include safe defaults for required fields,
+        # allowing ALTER TABLE on a populated production table.
+        required_columns = {
+            "module": "VARCHAR(80) NOT NULL DEFAULT 'general'",
+            "event_key": "VARCHAR(100) NOT NULL DEFAULT 'legacy'",
+            "reference_id": "INTEGER",
+            "recipient": "VARCHAR(1000) NOT NULL DEFAULT ''",
+            "subject": "VARCHAR(255) NOT NULL DEFAULT ''",
+            "status": "VARCHAR(30) NOT NULL DEFAULT 'unknown'",
+            "attempts": "INTEGER NOT NULL DEFAULT 0",
+            "error_message": "VARCHAR(2000)",
+            "created_at": "TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP",
+            "sent_at": "TIMESTAMP",
+        }
 
-        # Keep any legacy NULL values safe if the column was previously added
-        # manually without a NOT NULL constraint.
+        columns = {column["name"] for column in inspector.get_columns("portal_email_logs")}
+        for column_name, definition in required_columns.items():
+            if column_name not in columns:
+                logger.warning(
+                    "Applying startup migration: adding portal_email_logs.%s",
+                    column_name,
+                )
+                with db.engine.begin() as connection:
+                    connection.execute(text(
+                        f"ALTER TABLE portal_email_logs ADD COLUMN {column_name} {definition}"
+                    ))
+                columns.add(column_name)
+
+        # Backfill nullable/legacy values before enforcing model constraints.
         with db.engine.begin() as connection:
             connection.execute(text(
                 "UPDATE portal_email_logs SET module = 'general' WHERE module IS NULL"
             ))
-            if db.engine.dialect.name == "postgresql":
-                connection.execute(text(
-                    "ALTER TABLE portal_email_logs ALTER COLUMN module SET NOT NULL"
-                ))
             connection.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_portal_email_logs_module "
-                "ON portal_email_logs (module)"
+                "UPDATE portal_email_logs SET event_key = 'legacy' WHERE event_key IS NULL"
             ))
-        logger.info("Portal email log schema check completed")
+            connection.execute(text(
+                "UPDATE portal_email_logs SET recipient = '' WHERE recipient IS NULL"
+            ))
+            connection.execute(text(
+                "UPDATE portal_email_logs SET subject = '' WHERE subject IS NULL"
+            ))
+            connection.execute(text(
+                "UPDATE portal_email_logs SET status = 'unknown' WHERE status IS NULL"
+            ))
+            connection.execute(text(
+                "UPDATE portal_email_logs SET attempts = 0 WHERE attempts IS NULL"
+            ))
+            connection.execute(text(
+                "UPDATE portal_email_logs SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"
+            ))
+
+            if db.engine.dialect.name == "postgresql":
+                for column_name in (
+                    "module", "event_key", "recipient", "subject",
+                    "status", "attempts", "created_at",
+                ):
+                    connection.execute(text(
+                        f"ALTER TABLE portal_email_logs ALTER COLUMN {column_name} SET NOT NULL"
+                    ))
+
+            indexes = {
+                "ix_portal_email_logs_module": "module",
+                "ix_portal_email_logs_event_key": "event_key",
+                "ix_portal_email_logs_reference_id": "reference_id",
+                "ix_portal_email_logs_status": "status",
+                "ix_portal_email_logs_created_at": "created_at",
+            }
+            for index_name, column_name in indexes.items():
+                connection.execute(text(
+                    f"CREATE INDEX IF NOT EXISTS {index_name} "
+                    f"ON portal_email_logs ({column_name})"
+                ))
+
+        logger.info("Portal email log schema check completed (all expected columns verified)")
     except Exception:
-        # Do not prevent the whole portal from starting; the traceback is
-        # recorded so a failed migration can be diagnosed from Render logs.
+        # Do not prevent the whole portal from starting; keep the traceback in
+        # Render logs so database permission/schema issues can be diagnosed.
         logger.exception("Portal email log startup migration failed")
 
 
