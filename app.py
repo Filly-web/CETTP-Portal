@@ -191,6 +191,9 @@ class SupplierTINMaster(db.Model):
 
 
 class WHTTINBatch(db.Model):
+    # Explicit name is required because the acronym-heavy class name is
+    # otherwise auto-converted to a different table name by Flask-SQLAlchemy.
+    __tablename__ = "wht_tin_batch"
     id = db.Column(db.Integer, primary_key=True)
     filename = db.Column(db.String(255), nullable=False)
     imported_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
