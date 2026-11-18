@@ -1518,40 +1518,62 @@ def wht_tin_master_import():
     if not _tax_required(): return redirect(url_for('home'))
     file=request.files.get('file')
     if not file or not file.filename: flash('Choose the Supplier TIN Master Excel/CSV file.', 'warning'); return redirect(url_for('wht_tin_home'))
+    wb=None
     try:
         name=secure_filename(file.filename).lower()
         if name.endswith('.csv'):
-            data=list(csv.reader(io.StringIO(file.stream.read().decode('utf-8-sig'))))
+            stream=io.StringIO(file.stream.read().decode('utf-8-sig'))
+            iterator=csv.reader(stream)
+            headers=next(iterator, None)
         elif name.endswith(('.xlsx','.xlsm')):
-            wb=load_workbook(file, read_only=True, data_only=True); data=list(wb.active.iter_rows(values_only=True)); wb.close()
+            wb=load_workbook(file, read_only=True, data_only=True)
+            ws=wb.active
+            iterator=ws.iter_rows(values_only=True)
+            headers=next(iterator, None)
         else: raise ValueError('Only .xlsx or .csv files are supported.')
-        if not data: raise ValueError('The master file is empty.')
-        headers=[' '.join(str(v or '').strip().lower().replace('_',' ').split()) for v in data[0]]
+        if not headers: raise ValueError('The master file is empty.')
+        headers=[' '.join(str(v or '').strip().lower().replace('_',' ').split()) for v in headers]
         def col(*names):
             for n in names:
                 if n in headers: return headers.index(n)
             return None
         ti=col('tin','supplier tin','taxpayer identification number'); ai=col('agency name','business name','supplier name'); pi=col('sole proprietor name','proprietor name','owner name')
         if ti is None or ai is None: raise ValueError('Required columns: TIN and Agency Name/Business Name. Sole Proprietor Name is optional.')
-        added=updated=0
-        for rn,row in enumerate(data[1:], start=2):
+        # Prefetch existing records once rather than issuing a SELECT for every spreadsheet row.
+        existing_by_tin={m.tin:m for m in SupplierTINMaster.query.all()}
+        agency_to_tin={m.agency_name.strip().casefold():m.tin for m in existing_by_tin.values() if m.agency_name}
+        added=updated=processed=0
+        file_seen={}
+        for rn,row in enumerate(iterator, start=2):
             tin=str(row[ti] or '').strip() if ti < len(row) else ''
             agency=str(row[ai] or '').strip() if ai < len(row) else ''
             proprietor=str(row[pi] or '').strip() if pi is not None and pi < len(row) else ''
             if not tin and not agency: continue
             if not tin or not agency: raise ValueError(f'Row {rn}: both TIN and Agency Name are required.')
             if len(tin)>40: raise ValueError(f'Row {rn}: TIN is too long.')
-            obj=SupplierTINMaster.query.filter_by(tin=tin).first()
-            # Prevent a single exact agency/proprietor identity from being assigned to another TIN.
-            clash=SupplierTINMaster.query.filter(SupplierTINMaster.tin!=tin, func.lower(SupplierTINMaster.agency_name)==agency.lower()).first()
-            if clash: raise ValueError(f'Row {rn}: agency name already belongs to TIN {clash.tin}; resolve the conflict before importing.')
+            file_tin=file_seen.get(agency.casefold())
+            if file_tin and file_tin!=tin: raise ValueError(f'Row {rn}: agency name appears with conflicting TINs in this file ({file_tin} and {tin}).')
+            file_seen[agency.casefold()]=tin
+            clash_tin=agency_to_tin.get(agency.casefold())
+            if clash_tin and clash_tin!=tin: raise ValueError(f'Row {rn}: agency name already belongs to TIN {clash_tin}; resolve the conflict before importing.')
+            obj=existing_by_tin.get(tin)
             if obj:
+                old_name=(obj.agency_name or '').strip().casefold()
+                if old_name and old_name!=agency.casefold(): agency_to_tin.pop(old_name,None)
                 obj.agency_name=agency; obj.proprietor_name=proprietor or None; obj.updated_by=session.get('actor_name','Tax Compliance'); updated+=1
             else:
-                db.session.add(SupplierTINMaster(tin=tin, agency_name=agency, proprietor_name=proprietor or None, updated_by=session.get('actor_name','Tax Compliance'))); added+=1
-        db.session.commit(); flash(f'Supplier TIN Master updated: {added} new and {updated} updated record(s).', 'success')
+                obj=SupplierTINMaster(tin=tin, agency_name=agency, proprietor_name=proprietor or None, updated_by=session.get('actor_name','Tax Compliance'))
+                db.session.add(obj); existing_by_tin[tin]=obj; added+=1
+            agency_to_tin[agency.casefold()]=tin
+            processed+=1
+            # Bound ORM pending state for large files while retaining one transaction.
+            if processed % 500 == 0: db.session.flush()
+        db.session.commit()
+        flash(f'Supplier TIN Master updated: {added} new and {updated} updated record(s).', 'success')
     except Exception as exc:
         db.session.rollback(); flash(f'Master import failed: {exc}', 'danger')
+    finally:
+        if wb is not None: wb.close()
     return redirect(url_for('wht_tin_home'))
 
 @app.route('/wht-tin/import', methods=['POST'])
