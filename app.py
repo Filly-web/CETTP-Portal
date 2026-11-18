@@ -180,6 +180,18 @@ class ReconciliationItem(db.Model):
     def variance(self):
         return Decimal(str(self.book_amount or 0)) - Decimal(str(self.tra_amount or 0))
 
+class SupplierTINImportBatch(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    filename = db.Column(db.String(255), nullable=False)
+    imported_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    imported_by = db.Column(db.String(120))
+    added_tins = db.Column(db.Text, default='[]', nullable=False)
+    updated_count = db.Column(db.Integer, default=0)
+    @property
+    def added_count(self):
+        try: return len(__import__('json').loads(self.added_tins or '[]'))
+        except Exception: return 0
+
 class SupplierTINMaster(db.Model):
     """Reusable supplier/agency TIN reference; TIN is stored as text."""
     id = db.Column(db.Integer, primary_key=True)
@@ -188,6 +200,7 @@ class SupplierTINMaster(db.Model):
     proprietor_name = db.Column(db.String(240))
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
     updated_by = db.Column(db.String(120))
+    created_import_batch_id = db.Column(db.Integer, db.ForeignKey('supplier_tin_import_batch.id', ondelete='SET NULL'))
 
 
 class WHTTINBatch(db.Model):
@@ -199,6 +212,7 @@ class WHTTINBatch(db.Model):
     imported_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
     imported_by = db.Column(db.String(120))
     row_count = db.Column(db.Integer, default=0)
+    period = db.Column(db.String(7), index=True)  # YYYY-MM, optional
 
 
 class WHTTINLedgerRow(db.Model):
@@ -1509,9 +1523,10 @@ def wht_tin_template(kind):
 def wht_tin_home():
     if not _tax_required(): return redirect(url_for('home'))
     masters=SupplierTINMaster.query.order_by(SupplierTINMaster.agency_name.asc()).limit(500).all()
-    batches=WHTTINBatch.query.order_by(WHTTINBatch.imported_at.desc()).limit(30).all()
+    batches=WHTTINBatch.query.order_by(WHTTINBatch.imported_at.desc()).limit(50).all()
+    master_batches=SupplierTINImportBatch.query.order_by(SupplierTINImportBatch.imported_at.desc()).limit(30).all()
     counts={s:WHTTINLedgerRow.query.filter_by(match_status=s).count() for s in ['Auto-Matched','Second Review','Unmatched','Manually Approved']}
-    return render_template('wht_tin.html', masters=masters, batches=batches, counts=counts)
+    return render_template('wht_tin.html', masters=masters, batches=batches, master_batches=master_batches, counts=counts)
 
 @app.route('/wht-tin/master/import', methods=['POST'])
 def wht_tin_master_import():
@@ -1542,7 +1557,10 @@ def wht_tin_master_import():
         # Prefetch existing records once rather than issuing a SELECT for every spreadsheet row.
         existing_by_tin={m.tin:m for m in SupplierTINMaster.query.all()}
         agency_to_tin={m.agency_name.strip().casefold():m.tin for m in existing_by_tin.values() if m.agency_name}
+        import_batch=SupplierTINImportBatch(filename=secure_filename(file.filename)[:255], imported_by=session.get('actor_name','Tax Compliance'))
+        db.session.add(import_batch); db.session.flush()
         added=updated=processed=0
+        added_tins=[]
         file_seen={}
         for rn,row in enumerate(iterator, start=2):
             tin=str(row[ti] or '').strip() if ti < len(row) else ''
@@ -1562,12 +1580,13 @@ def wht_tin_master_import():
                 if old_name and old_name!=agency.casefold(): agency_to_tin.pop(old_name,None)
                 obj.agency_name=agency; obj.proprietor_name=proprietor or None; obj.updated_by=session.get('actor_name','Tax Compliance'); updated+=1
             else:
-                obj=SupplierTINMaster(tin=tin, agency_name=agency, proprietor_name=proprietor or None, updated_by=session.get('actor_name','Tax Compliance'))
-                db.session.add(obj); existing_by_tin[tin]=obj; added+=1
+                obj=SupplierTINMaster(tin=tin, agency_name=agency, proprietor_name=proprietor or None, updated_by=session.get('actor_name','Tax Compliance'), created_import_batch_id=import_batch.id)
+                db.session.add(obj); existing_by_tin[tin]=obj; added_tins.append(tin); added+=1
             agency_to_tin[agency.casefold()]=tin
             processed+=1
             # Bound ORM pending state for large files while retaining one transaction.
             if processed % 500 == 0: db.session.flush()
+        import_batch.added_tins=__import__('json').dumps(added_tins); import_batch.updated_count=updated
         db.session.commit()
         flash(f'Supplier TIN Master updated: {added} new and {updated} updated record(s).', 'success')
     except Exception as exc:
@@ -1609,7 +1628,10 @@ def wht_tin_import():
                 if len(parsed) > 100000: raise ValueError('Workbook exceeds the 100,000-row import limit. Split the reporting period into separate workbooks.')
         wb.close()
         if not parsed: raise ValueError('No ledger rows were found in the workbook.')
-        batch=WHTTINBatch(filename=secure_filename(file.filename)[:255], imported_by=session.get('actor_name','Tax Compliance'), row_count=len(parsed)); db.session.add(batch); db.session.flush()
+        period=request.form.get('period','').strip()
+        if not period: raise ValueError('Select the WHT return reporting month.')
+        if period and (len(period)!=7 or period[4]!='-' or not period[:4].isdigit() or not period[5:].isdigit() or not 1<=int(period[5:])<=12): raise ValueError('Reporting period must be in YYYY-MM format.')
+        batch=WHTTINBatch(filename=secure_filename(file.filename)[:255], imported_by=session.get('actor_name','Tax Compliance'), row_count=len(parsed), period=period or None); db.session.add(batch); db.session.flush()
         for sheet,ledger,rownum,raw,supplier,tin,candidate,cname,source,score,status in parsed:
             db.session.add(WHTTINLedgerRow(batch_id=batch.id,sheet_name=sheet,ledger_type=ledger,row_number=rownum,
                 raw_data=__import__('json').dumps(raw, default=str),supplier_name=supplier,matched_tin=tin,candidate_tin=candidate,
@@ -1617,6 +1639,54 @@ def wht_tin_import():
         db.session.commit(); flash(f'Imported {len(parsed)} ledger row(s) across {len(set(x[0] for x in parsed))} worksheet(s). Download the consolidated report or review exceptions below.', 'success')
     except Exception as exc:
         db.session.rollback(); flash(f'Ledger import failed: {exc}', 'danger')
+    return redirect(url_for('wht_tin_home'))
+
+@app.route('/wht-tin/master/add', methods=['POST'])
+def wht_tin_master_add():
+    if not _tax_required(): return redirect(url_for('home'))
+    tin=request.form.get('tin','').strip(); agency=request.form.get('agency_name','').strip(); proprietor=request.form.get('proprietor_name','').strip()
+    if not tin or not agency: flash('TIN and Agency Name are required.', 'warning')
+    elif len(tin)>40: flash('TIN is too long.', 'warning')
+    elif SupplierTINMaster.query.filter_by(tin=tin).first(): flash('This TIN already exists. Use the master import to update its details.', 'warning')
+    elif SupplierTINMaster.query.filter(func.lower(SupplierTINMaster.agency_name)==agency.lower()).first(): flash('This agency name is already mapped to another TIN.', 'warning')
+    else:
+        db.session.add(SupplierTINMaster(tin=tin,agency_name=agency,proprietor_name=proprietor or None,updated_by=session.get('actor_name','Tax Compliance'))); db.session.commit(); flash('Single TIN added successfully.', 'success')
+    return redirect(url_for('wht_tin_home'))
+
+@app.route('/wht-tin/master/batch/<int:batch_id>/delete', methods=['POST'])
+def wht_tin_master_batch_delete(batch_id):
+    if not _tax_required(): return redirect(url_for('home'))
+    batch=SupplierTINImportBatch.query.get_or_404(batch_id)
+    try:
+        added=__import__('json').loads(batch.added_tins or '[]')
+        for tin in added:
+            master=SupplierTINMaster.query.filter_by(tin=tin).first()
+            if master and master.created_import_batch_id==batch.id:
+                db.session.delete(master)
+        db.session.delete(batch); db.session.commit(); flash('TIN import batch deleted. Newly added records from this batch were removed; previously existing master records were preserved.', 'success')
+    except Exception as exc: db.session.rollback(); flash(f'Unable to delete TIN batch: {exc}', 'danger')
+    return redirect(url_for('wht_tin_home'))
+
+@app.route('/wht-tin/batch/<int:batch_id>/delete', methods=['POST'])
+def wht_tin_batch_delete(batch_id):
+    if not _tax_required(): return redirect(url_for('home'))
+    batch=WHTTINBatch.query.get_or_404(batch_id)
+    db.session.delete(batch); db.session.commit(); flash(f'Ledger upload {batch.filename} deleted, including its ledger rows.', 'success')
+    return redirect(url_for('wht_tin_home'))
+
+@app.route('/wht-tin/review/bulk', methods=['POST'])
+def wht_tin_review_bulk():
+    if not _tax_required(): return redirect(url_for('home'))
+    row_ids=request.form.getlist('row_id'); approved=0; errors=[]
+    for row_id in row_ids:
+        tin=request.form.get(f'tin_{row_id}','').strip()
+        row=WHTTINLedgerRow.query.get(row_id)
+        if not row: continue
+        master=SupplierTINMaster.query.filter_by(tin=tin).first()
+        if not master: errors.append(f'Row {row_id}: invalid TIN'); continue
+        row.reviewed_tin=tin; row.matched_tin=tin; row.match_status='Manually Approved'; row.reviewed_by=session.get('actor_name','Tax Compliance'); row.reviewed_at=datetime.utcnow(); approved+=1
+    db.session.commit()
+    flash(f'{approved} selected ledger row(s) approved.' + ((' Issues: '+ '; '.join(errors)) if errors else ''), 'success' if approved else 'warning')
     return redirect(url_for('wht_tin_home'))
 
 @app.route('/wht-tin/batch/<int:batch_id>/report')
@@ -3168,6 +3238,16 @@ def _run_safe_startup_migrations():
 
 with app.app_context():
     db.create_all()
+    # Additive schema updates for the WHT TIN Matching enhancements.
+    try:
+        inspector=inspect(db.engine)
+        with db.engine.begin() as connection:
+            if inspector.has_table('wht_tin_batch') and 'period' not in {c['name'] for c in inspector.get_columns('wht_tin_batch')}:
+                connection.execute(text('ALTER TABLE wht_tin_batch ADD COLUMN period VARCHAR(7)'))
+            if inspector.has_table('supplier_tin_master') and 'created_import_batch_id' not in {c['name'] for c in inspector.get_columns('supplier_tin_master')}:
+                connection.execute(text('ALTER TABLE supplier_tin_master ADD COLUMN created_import_batch_id INTEGER'))
+    except Exception:
+        logger.exception('WHT TIN Matching additive migration failed')
     _run_safe_startup_migrations()
 
 if __name__ == "__main__":
