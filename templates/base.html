@@ -31,6 +31,7 @@
   <a class="side-link {{ 'active' if request.endpoint == 'notifications' else '' }}" href="{{ url_for('notifications') }}"><span class="side-icon">♧</span> Notifications {% if unread_notification_count %}<span class="badge bg-danger ms-auto">{{ unread_notification_count }}</span>{% endif %}</a>
   <a class="side-link {{ 'active' if request.endpoint in ['tax_update','case_history'] else '' }}" href="{{ url_for('cases') }}"><span class="side-icon">◎</span> TRA Tracking</a>
   <a class="side-link {{ 'active' if request.endpoint == 'reconciliation_home' else '' }}" href="{{ url_for('reconciliation_home', type='VAT') }}"><span class="side-icon">↔</span> VAT &amp; WHT Reconciliation</a>
+  <a class="side-link {{ 'active' if request.endpoint and request.endpoint.startswith('wht_tin_') else '' }}" href="{{ url_for('wht_tin_home') }}"><span class="side-icon">#</span> WHT TIN Matching</a>
   <a class="side-link {{ 'active' if request.endpoint and request.endpoint.startswith('tax_vat_control') else '' }}" href="{{ url_for('tax_vat_control') }}"><span class="side-icon">▣</span> VAT Control Account</a>
   <a class="side-link {{ 'active' if request.endpoint and request.endpoint.startswith('tax_investment_wht') else '' }}" href="{{ url_for('tax_investment_wht') }}"><span class="side-icon">▤</span> Investment WHT Credits</a>
   <a class="side-link {{ 'active' if request.endpoint and request.endpoint.startswith('tax_email') else '' }}" href="{{ url_for('tax_email_settings') }}"><span class="side-icon">✉</span> Email Settings &amp; Logs</a>

@@ -180,6 +180,44 @@ class ReconciliationItem(db.Model):
     def variance(self):
         return Decimal(str(self.book_amount or 0)) - Decimal(str(self.tra_amount or 0))
 
+class SupplierTINMaster(db.Model):
+    """Reusable supplier/agency TIN reference; TIN is stored as text."""
+    id = db.Column(db.Integer, primary_key=True)
+    tin = db.Column(db.String(40), nullable=False, unique=True, index=True)
+    agency_name = db.Column(db.String(240), nullable=False, index=True)
+    proprietor_name = db.Column(db.String(240))
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    updated_by = db.Column(db.String(120))
+
+
+class WHTTINBatch(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    filename = db.Column(db.String(255), nullable=False)
+    imported_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    imported_by = db.Column(db.String(120))
+    row_count = db.Column(db.Integer, default=0)
+
+
+class WHTTINLedgerRow(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    batch_id = db.Column(db.Integer, db.ForeignKey('wht_tin_batch.id', ondelete='CASCADE'), nullable=False, index=True)
+    sheet_name = db.Column(db.String(120), nullable=False)
+    ledger_type = db.Column(db.String(120), nullable=False)
+    row_number = db.Column(db.Integer, nullable=False)
+    raw_data = db.Column(db.Text, nullable=False)
+    supplier_name = db.Column(db.String(240), index=True)
+    matched_tin = db.Column(db.String(40))
+    candidate_tin = db.Column(db.String(40))
+    candidate_name = db.Column(db.String(240))
+    match_source = db.Column(db.String(40))
+    confidence = db.Column(db.Numeric(5,2), default=0)
+    match_status = db.Column(db.String(30), nullable=False, default='Unmatched', index=True)
+    reviewed_tin = db.Column(db.String(40))
+    reviewed_by = db.Column(db.String(120))
+    reviewed_at = db.Column(db.DateTime)
+    batch = db.relationship('WHTTINBatch', backref=db.backref('rows', lazy=True, cascade='all, delete-orphan'))
+
+
 class RegisterUpload(db.Model):
     """Monthly Premium Register upload history; stored separately to preserve existing V1.1 tables."""
     id = db.Column(db.Integer, primary_key=True)
@@ -1384,6 +1422,226 @@ def reconciliation_delete(item_id):
     db.session.delete(item); db.session.commit()
     flash("Reconciliation row deleted.", "success")
     return redirect(url_for("reconciliation_home", type=kind))
+
+# WHT TIN Master and combined multi-sheet ledger matching
+WHT_NAMED_LEDGERS = {
+    'MEDICAL REINSURANCE PREMIUM': 'Medical Reinsurance Premium',
+    'GI REINSURANCE PREMIUM': 'GI Reinsurance Premium',
+    'PRIOR PERIODS': 'Prior Periods',
+    'SMART BROKERS': 'Smart Brokers',
+    'NON SMART AGENCIES': 'Non-Smart Agencies',
+}
+WHT_LEDGER_HEADERS = ['GL Date', 'Natural Account Description', 'Transaction Number', 'Batch Name',
+    'Supplier/Customer Name', 'Transaction', 'Transaction Description', 'Accounted Amount', 'GROSS-AMOUNT', 'TIN']
+
+def _wht_norm(value):
+    import re, unicodedata
+    value = unicodedata.normalize('NFKD', str(value or '')).encode('ascii', 'ignore').decode().upper()
+    value = re.sub(r'[^A-Z0-9]+', ' ', value)
+    tokens = [t for t in value.split() if t not in {'LIMITED','LTD','COMPANY','CO','PLC','THE','AND'}]
+    return ' '.join(sorted(tokens))
+
+def _wht_score(left, right):
+    from difflib import SequenceMatcher
+    a, b = _wht_norm(left), _wht_norm(right)
+    if not a or not b: return 0.0
+    seq = SequenceMatcher(None, a, b).ratio()
+    at, bt = set(a.split()), set(b.split())
+    overlap = len(at & bt) / max(len(at | bt), 1)
+    return round(max(seq, overlap) * 100, 2)
+
+def _wht_ledger_type(sheet_name):
+    import re
+    raw = ' '.join(str(sheet_name or '').upper().replace('_',' ').replace('-',' ').split())
+    digits = re.search(r'(?<!\\d)(3303(?:0[1-9]|1[0-8]))(?!\\d)', raw)
+    if digits: return digits.group(1)
+    key = raw.replace('  ', ' ')
+    for candidate, label in WHT_NAMED_LEDGERS.items():
+        if key == candidate or key.replace(' ', '') == candidate.replace(' ', ''):
+            return label
+    return None
+
+def _wht_match(name):
+    candidates=[]
+    for supplier in SupplierTINMaster.query.all():
+        for field, value in [('Agency Name', supplier.agency_name), ('Proprietor Name', supplier.proprietor_name)]:
+            if value:
+                score=_wht_score(name, value)
+                if score >= 60:
+                    candidates.append((score, supplier.tin, value, field))
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    if not candidates: return None, None, None, None, 0, 'Unmatched'
+    best=candidates[0]
+    # Any near-equal candidate with a different TIN requires human review.
+    conflicting={c[1] for c in candidates if c[0] >= max(60, best[0]-3)}
+    if len(conflicting)>1:
+        return None, best[1], best[2], best[3], best[0], 'Second Review'
+    status='Auto-Matched' if best[0] >= 80 else ('Second Review' if best[0] >= 60 else 'Unmatched')
+    tin=best[1] if status=='Auto-Matched' else None
+    return tin, best[1], best[2], best[3], best[0], status
+
+@app.route('/wht-tin/template/<kind>')
+def wht_tin_template(kind):
+    if not _tax_required(): return redirect(url_for('home'))
+    wb=Workbook()
+    if kind == 'master':
+        ws=wb.active; ws.title='Supplier TIN Master'
+        ws.append(['TIN','Agency Name','Sole Proprietor Name'])
+    elif kind == 'ledgers':
+        wb.remove(wb.active)
+        names=[str(n) for n in range(330301,330319)] + list(WHT_NAMED_LEDGERS.values())
+        for name in names:
+            ws=wb.create_sheet(name[:31]); ws.append(WHT_LEDGER_HEADERS)
+    else:
+        abort(404)
+    for ws in wb.worksheets:
+        ws.freeze_panes='A2'; ws.auto_filter.ref=ws.dimensions
+        for cell in ws[1]: cell.font=Font(bold=True,color='FFFFFF'); cell.fill=PatternFill('solid',fgColor='17365D')
+        for col in ws.columns:
+            ws.column_dimensions[get_column_letter(col[0].column)].width=min(max(max(len(str(c.value or '')) for c in col)+2,14),32)
+    out=BytesIO(); wb.save(out); out.seek(0)
+    return send_file(out,mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',as_attachment=True,download_name=f'WHT_{kind}_template.xlsx')
+
+@app.route('/wht-tin')
+def wht_tin_home():
+    if not _tax_required(): return redirect(url_for('home'))
+    masters=SupplierTINMaster.query.order_by(SupplierTINMaster.agency_name.asc()).limit(500).all()
+    batches=WHTTINBatch.query.order_by(WHTTINBatch.imported_at.desc()).limit(30).all()
+    counts={s:WHTTINLedgerRow.query.filter_by(match_status=s).count() for s in ['Auto-Matched','Second Review','Unmatched','Manually Approved']}
+    return render_template('wht_tin.html', masters=masters, batches=batches, counts=counts)
+
+@app.route('/wht-tin/master/import', methods=['POST'])
+def wht_tin_master_import():
+    if not _tax_required(): return redirect(url_for('home'))
+    file=request.files.get('file')
+    if not file or not file.filename: flash('Choose the Supplier TIN Master Excel/CSV file.', 'warning'); return redirect(url_for('wht_tin_home'))
+    try:
+        name=secure_filename(file.filename).lower()
+        if name.endswith('.csv'):
+            data=list(csv.reader(io.StringIO(file.stream.read().decode('utf-8-sig'))))
+        elif name.endswith(('.xlsx','.xlsm')):
+            wb=load_workbook(file, read_only=True, data_only=True); data=list(wb.active.iter_rows(values_only=True)); wb.close()
+        else: raise ValueError('Only .xlsx or .csv files are supported.')
+        if not data: raise ValueError('The master file is empty.')
+        headers=[' '.join(str(v or '').strip().lower().replace('_',' ').split()) for v in data[0]]
+        def col(*names):
+            for n in names:
+                if n in headers: return headers.index(n)
+            return None
+        ti=col('tin','supplier tin','taxpayer identification number'); ai=col('agency name','business name','supplier name'); pi=col('sole proprietor name','proprietor name','owner name')
+        if ti is None or ai is None: raise ValueError('Required columns: TIN and Agency Name/Business Name. Sole Proprietor Name is optional.')
+        added=updated=0
+        for rn,row in enumerate(data[1:], start=2):
+            tin=str(row[ti] or '').strip() if ti < len(row) else ''
+            agency=str(row[ai] or '').strip() if ai < len(row) else ''
+            proprietor=str(row[pi] or '').strip() if pi is not None and pi < len(row) else ''
+            if not tin and not agency: continue
+            if not tin or not agency: raise ValueError(f'Row {rn}: both TIN and Agency Name are required.')
+            if len(tin)>40: raise ValueError(f'Row {rn}: TIN is too long.')
+            obj=SupplierTINMaster.query.filter_by(tin=tin).first()
+            # Prevent a single exact agency/proprietor identity from being assigned to another TIN.
+            clash=SupplierTINMaster.query.filter(SupplierTINMaster.tin!=tin, func.lower(SupplierTINMaster.agency_name)==agency.lower()).first()
+            if clash: raise ValueError(f'Row {rn}: agency name already belongs to TIN {clash.tin}; resolve the conflict before importing.')
+            if obj:
+                obj.agency_name=agency; obj.proprietor_name=proprietor or None; obj.updated_by=session.get('actor_name','Tax Compliance'); updated+=1
+            else:
+                db.session.add(SupplierTINMaster(tin=tin, agency_name=agency, proprietor_name=proprietor or None, updated_by=session.get('actor_name','Tax Compliance'))); added+=1
+        db.session.commit(); flash(f'Supplier TIN Master updated: {added} new and {updated} updated record(s).', 'success')
+    except Exception as exc:
+        db.session.rollback(); flash(f'Master import failed: {exc}', 'danger')
+    return redirect(url_for('wht_tin_home'))
+
+@app.route('/wht-tin/import', methods=['POST'])
+def wht_tin_import():
+    if not _tax_required(): return redirect(url_for('home'))
+    file=request.files.get('file')
+    if not file or not file.filename: flash('Choose the combined WHT ledger workbook.', 'warning'); return redirect(url_for('wht_tin_home'))
+    try:
+        if not secure_filename(file.filename).lower().endswith(('.xlsx','.xlsm')): raise ValueError('Combined ledger import must be an Excel .xlsx or .xlsm workbook.')
+        wb=load_workbook(file, read_only=True, data_only=True)
+        parsed=[]
+        for ws in wb.worksheets:
+            ledger_type=_wht_ledger_type(ws.title)
+            if not ledger_type: raise ValueError(f'Worksheet "{ws.title}" is not recognised. Use GL codes 330301–330318 or one of the five agreed ledger names.')
+            iterator=ws.iter_rows(values_only=True); header=next(iterator, None)
+            if not header: continue
+            headers=[' '.join(str(v or '').strip().lower().replace('_',' ').split()) for v in header]
+            aliases={'gl date':['gl date','date'],'natural account description':['natural account description','account description'],
+                'transaction number':['transaction number','transaction no'],'batch name':['batch name'],
+                'supplier/customer name':['supplier/customer name','supplier customer name','supplier name','customer name'],
+                'transaction':['transaction'],'transaction description':['transaction description','description'],
+                'accounted amount':['accounted amount'],'gross-amount':['gross-amount','gross amount'],'tin':['tin','supplier tin']}
+            positions={k:next((headers.index(a) for a in opts if a in headers),None) for k,opts in aliases.items()}
+            missing=[k for k,v in positions.items() if v is None]
+            if missing: raise ValueError(f'Worksheet "{ws.title}" is missing required columns: {", ".join(missing)}.')
+            for rownum, values in enumerate(iterator, start=2):
+                if not any(v not in (None,'') for v in values): continue
+                raw={h:(values[i] if i<len(values) else None) for h,i in positions.items() if i is not None}
+                supplier=str(raw.get('supplier/customer name') or '').strip()
+                tin,candidate,cname,source,score,status=_wht_match(supplier)
+                # Existing ledger TIN is retained only as source data; the matched TIN is a separate result.
+                parsed.append((ws.title,ledger_type,rownum,raw,supplier,tin,candidate,cname,source,score,status))
+                if len(parsed) > 100000: raise ValueError('Workbook exceeds the 100,000-row import limit. Split the reporting period into separate workbooks.')
+        wb.close()
+        if not parsed: raise ValueError('No ledger rows were found in the workbook.')
+        batch=WHTTINBatch(filename=secure_filename(file.filename)[:255], imported_by=session.get('actor_name','Tax Compliance'), row_count=len(parsed)); db.session.add(batch); db.session.flush()
+        for sheet,ledger,rownum,raw,supplier,tin,candidate,cname,source,score,status in parsed:
+            db.session.add(WHTTINLedgerRow(batch_id=batch.id,sheet_name=sheet,ledger_type=ledger,row_number=rownum,
+                raw_data=__import__('json').dumps(raw, default=str),supplier_name=supplier,matched_tin=tin,candidate_tin=candidate,
+                candidate_name=cname,match_source=source,confidence=score,match_status=status))
+        db.session.commit(); flash(f'Imported {len(parsed)} ledger row(s) across {len(set(x[0] for x in parsed))} worksheet(s). Download the consolidated report or review exceptions below.', 'success')
+    except Exception as exc:
+        db.session.rollback(); flash(f'Ledger import failed: {exc}', 'danger')
+    return redirect(url_for('wht_tin_home'))
+
+@app.route('/wht-tin/batch/<int:batch_id>/report')
+def wht_tin_report(batch_id):
+    if not _tax_required(): return redirect(url_for('home'))
+    batch=WHTTINBatch.query.get_or_404(batch_id); rows=WHTTINLedgerRow.query.filter_by(batch_id=batch.id).order_by(WHTTINLedgerRow.sheet_name,WHTTINLedgerRow.row_number).all()
+    wb=Workbook(); summary=wb.active; summary.title='Summary'
+    summary.append(['WHT TIN MATCHING REPORT']); summary.append(['Source workbook',batch.filename]); summary.append(['Imported at',batch.imported_at.strftime('%Y-%m-%d %H:%M')]); summary.append(['Total rows',len(rows)])
+    summary.append(['Status','Count'])
+    for status in ['Auto-Matched','Manually Approved','Second Review','Unmatched']:
+        summary.append([status,sum(1 for r in rows if r.match_status==status)])
+    summary.append([]); summary.append(['Worksheet','Ledger','Rows'])
+    for sheet in sorted(set(r.sheet_name for r in rows)):
+        subset=[r for r in rows if r.sheet_name==sheet]; summary.append([sheet,subset[0].ledger_type,len(subset)])
+    bysheet={}
+    for r in rows: bysheet.setdefault(r.sheet_name,[]).append(r)
+    for sheet, subset in bysheet.items():
+        title=sheet[:31]; ws=wb.create_sheet(title)
+        ws.append(WHT_LEDGER_HEADERS+['Matched TIN','Match Status','Confidence %','Matched Against','Candidate TIN'])
+        for r in subset:
+            raw=__import__('json').loads(r.raw_data)
+            vals=[raw.get(h) for h in ['gl date','natural account description','transaction number','batch name','supplier/customer name','transaction','transaction description','accounted amount','gross-amount','tin']]
+            vals[9]=r.matched_tin or r.reviewed_tin or vals[9]
+            ws.append(vals+[r.matched_tin or r.reviewed_tin,r.match_status,float(r.confidence or 0),r.match_source,r.candidate_tin])
+    for status, title in [('Second Review','Second Review'),('Unmatched','Unmatched')]:
+        ws=wb.create_sheet(title); ws.append(['Ledger Sheet','Row','Supplier/Customer Name','Suggested Name','Candidate TIN','Confidence %','Reason/Status'])
+        for r in rows:
+            if r.match_status==status: ws.append([r.sheet_name,r.row_number,r.supplier_name,r.candidate_name,r.candidate_tin,float(r.confidence or 0), 'Conflicting TIN candidates or 60%–79% similarity' if status=='Second Review' else 'Below 60% similarity / no reliable match'])
+    ws=wb.create_sheet('Supplier TIN Master'); ws.append(['TIN','Agency Name','Sole Proprietor Name'])
+    for m in SupplierTINMaster.query.order_by(SupplierTINMaster.agency_name).all(): ws.append([m.tin,m.agency_name,m.proprietor_name])
+    for ws in wb.worksheets:
+        ws.freeze_panes='A2'; ws.auto_filter.ref=ws.dimensions
+        for cell in ws[1]: cell.font=Font(bold=True,color='FFFFFF'); cell.fill=PatternFill('solid',fgColor='17365D')
+        for col in ws.columns:
+            letter=get_column_letter(col[0].column); width=min(max(max(len(str(c.value or '')) for c in col)+2,12),42); ws.column_dimensions[letter].width=width
+        for row in ws.iter_rows():
+            for cell in row:
+                if isinstance(cell.value,str) and cell.value.startswith(('=','+','-','@')): cell.data_type='s'
+    out=BytesIO(); wb.save(out); out.seek(0)
+    return send_file(out,mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',as_attachment=True,download_name=f'WHT_TIN_Matching_Batch_{batch.id}.xlsx')
+
+@app.route('/wht-tin/review/<int:row_id>', methods=['POST'])
+def wht_tin_review(row_id):
+    if not _tax_required(): return redirect(url_for('home'))
+    row=WHTTINLedgerRow.query.get_or_404(row_id); tin=request.form.get('tin','').strip()
+    master=SupplierTINMaster.query.filter_by(tin=tin).first()
+    if not master: flash('Select a valid TIN from the Supplier TIN Master.', 'danger')
+    else:
+        row.reviewed_tin=tin; row.matched_tin=tin; row.match_status='Manually Approved'; row.reviewed_by=session.get('actor_name','Tax Compliance'); row.reviewed_at=datetime.utcnow(); db.session.commit(); flash('TIN match approved and saved.', 'success')
+    return redirect(url_for('wht_tin_home'))
 
 # Premium Register cancellation / endorsement tracking
 CANCEL_TRA_STATUSES = ["Not Submitted", "Pending", "Approved", "Rejected", "Not Applicable"]
