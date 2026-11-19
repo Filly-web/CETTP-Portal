@@ -1,0 +1,13 @@
+{% extends 'base.html' %}{% block title %}Request EFD Invoice{% endblock %}{% block content %}
+<div class="container-fluid py-3"><h2>Request EFD Invoice</h2><p class="text-muted">Submit a Word invoice for Tax Compliance to process through the EFD portal.</p>
+<div class="card shadow-sm"><div class="card-body"><form method="post" enctype="multipart/form-data">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<div class="row g-3"><div class="col-md-6"><label class="form-label">Supplier / Business Name *</label><input class="form-control" name="supplier_name" required></div>
+<div class="col-md-6"><label class="form-label">Supplier TIN</label><input class="form-control" name="supplier_tin"></div>
+<div class="col-md-4"><label class="form-label">Invoice Number</label><input class="form-control" name="invoice_number"></div>
+<div class="col-md-4"><label class="form-label">Invoice Date</label><input class="form-control" type="date" name="invoice_date"></div>
+<div class="col-md-4"><label class="form-label">Amount</label><input class="form-control" type="number" min="0" step="0.01" name="amount"></div>
+<div class="col-md-3"><label class="form-label">Currency</label><input class="form-control" name="currency" value="TZS"></div>
+<div class="col-12"><label class="form-label">Purpose / Description *</label><textarea class="form-control" name="purpose" rows="3" required></textarea></div>
+<div class="col-12"><label class="form-label">Invoice Word document * (.doc or .docx)</label><input class="form-control" type="file" name="invoice_file" accept=".doc,.docx" required><div class="form-text">Mandatory. Maximum file size 15 MB.</div></div></div>
+<button class="btn btn-primary mt-3" type="submit">Submit EFD Invoice Request</button></form></div></div></div>{% endblock %}

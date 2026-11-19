@@ -1,4 +1,5 @@
 import os
+import uuid
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, send_file, abort
@@ -116,7 +117,6 @@ class PortalEmailLog(db.Model):
     __tablename__ = "portal_email_logs"
     id = db.Column(db.Integer, primary_key=True)
     module = db.Column(db.String(80), nullable=False, index=True)
-    event_type = db.Column(db.String(100), nullable=False, default="notification", index=True)
     event_key = db.Column(db.String(100), nullable=False, index=True)
     reference_id = db.Column(db.Integer, index=True)
     recipient = db.Column(db.String(1000), nullable=False)
@@ -305,6 +305,31 @@ class TaxDeadline(db.Model):
     control_number = db.Column(db.String(100))
     notes = db.Column(db.Text)
     created_by = db.Column(db.String(120), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class EFDInvoiceRequest(db.Model):
+    __tablename__ = "efd_invoice_requests"
+    id = db.Column(db.Integer, primary_key=True)
+    reference = db.Column(db.String(32), unique=True, nullable=False, index=True)
+    requester_email = db.Column(db.String(180), nullable=False, index=True)
+    requester_name = db.Column(db.String(180), nullable=False)
+    supplier_name = db.Column(db.String(180), nullable=False)
+    supplier_tin = db.Column(db.String(40))
+    invoice_number = db.Column(db.String(100))
+    invoice_date = db.Column(db.Date)
+    amount = db.Column(db.Numeric(16,2))
+    currency = db.Column(db.String(10), default="TZS")
+    purpose = db.Column(db.Text, nullable=False)
+    original_filename = db.Column(db.String(255), nullable=False)
+    original_file_data = db.Column(db.LargeBinary, nullable=False)
+    verification_code = db.Column(db.String(100))
+    receipt_time = db.Column(db.String(20))
+    processed_filename = db.Column(db.String(255))
+    processed_file_data = db.Column(db.LargeBinary)
+    status = db.Column(db.String(40), nullable=False, default="Pending")
+    tax_notes = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -587,12 +612,8 @@ def _central_send_email(module, event_key, subject, body, recipients=None, refer
     recipients = recipients or _notification_recipients()
     recipients = [str(x).strip() for x in recipients if str(x).strip()]
     recipient_label = ", ".join(recipients) if recipients else "NOT_CONFIGURED"
-    normalized_event_key = (event_key or "notification")[:100]
-    log = PortalEmailLog(module=(module or "portal")[:80],
-        event_type=normalized_event_key,
-        event_key=normalized_event_key,
-        reference_id=reference_id, recipient=recipient_label[:1000],
-        subject=(subject or "CETTP notification")[:255], status="pending", attempts=0)
+    log = PortalEmailLog(module=(module or "portal")[:80], event_key=(event_key or "notification")[:100],
+        reference_id=reference_id, recipient=recipient_label[:1000], subject=(subject or "CETTP notification")[:255], status="pending", attempts=0)
     db.session.add(log)
     try:
         db.session.flush()
@@ -2124,6 +2145,110 @@ def cancellation_tracker_template():
 
 
 # ---------------------------------------------------------------------------
+# EFD Invoice Request workflow (initiator-to-Tax-Compliance)
+EFD_REQUEST_MAX_BYTES = 15 * 1024 * 1024
+EFD_REQUEST_ALLOWED = {"doc", "docx"}
+
+def _efd_request_ref():
+    return f"EFD-{datetime.now():%Y}-{uuid.uuid4().hex[:8].upper()}"
+
+@app.route("/efd-requests/new", methods=["GET", "POST"])
+def efd_request_new():
+    if session.get("role") != "initiator": return redirect(url_for("home"))
+    if request.method == "POST":
+        upload = request.files.get("invoice_file")
+        supplier = request.form.get("supplier_name", "").strip()
+        purpose = request.form.get("purpose", "").strip()
+        if not upload or not upload.filename or not supplier or not purpose:
+            flash("Supplier name, purpose and mandatory Word invoice are required.", "warning")
+            return redirect(url_for("efd_request_new"))
+        filename = secure_filename(upload.filename)
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        data = upload.read(EFD_REQUEST_MAX_BYTES + 1)
+        if ext not in EFD_REQUEST_ALLOWED or len(data) > EFD_REQUEST_MAX_BYTES:
+            flash("Attach a Word document (.doc or .docx) up to 15 MB.", "danger")
+            return redirect(url_for("efd_request_new"))
+        try:
+            invoice_date = date.fromisoformat(request.form.get("invoice_date")) if request.form.get("invoice_date") else None
+            amount = Decimal(request.form.get("amount")) if request.form.get("amount", "").strip() else None
+        except (ValueError, InvalidOperation):
+            flash("Please check the invoice date or amount.", "danger"); return redirect(url_for("efd_request_new"))
+        email = _initiator_email()
+        item = EFDInvoiceRequest(reference=_efd_request_ref(), requester_email=email, requester_name=session.get("actor_name", email),
+            supplier_name=supplier, supplier_tin=request.form.get("supplier_tin", "").strip() or None,
+            invoice_number=request.form.get("invoice_number", "").strip() or None, invoice_date=invoice_date, amount=amount,
+            currency=request.form.get("currency", "TZS").strip() or "TZS", purpose=purpose, original_filename=filename, original_file_data=data, status="Pending")
+        db.session.add(item); db.session.commit()
+        subject=f"New EFD invoice request: {item.reference}"
+        body=f"A new EFD invoice request has been submitted.\n\nRequest: {item.reference}\nRequester: {item.requester_name} ({email})\nSupplier: {supplier}\nInvoice No: {item.invoice_number or 'Not provided'}\nPurpose: {purpose}\n\nLog in to CETTP Tax Compliance Workplace to review and process the request."
+        _central_send_email("efd_invoice_requests", "request_submitted", subject, body, recipients=["faugusti@britam.co.tz"], reference_id=item.id)
+        flash(f"EFD invoice request {item.reference} submitted successfully.", "success")
+        return redirect(url_for("efd_request_my"))
+    return render_template("efd_request_new.html")
+
+@app.route("/efd-requests/my")
+def efd_request_my():
+    if session.get("role") != "initiator": return redirect(url_for("home"))
+    rows=EFDInvoiceRequest.query.filter_by(requester_email=_initiator_email()).order_by(EFDInvoiceRequest.created_at.desc()).all()
+    return render_template("efd_request_my.html", requests=rows)
+
+@app.route("/efd-requests/workplace")
+def efd_request_workplace():
+    if session.get("role") != "tax": return redirect(url_for("home"))
+    rows=EFDInvoiceRequest.query.order_by(EFDInvoiceRequest.created_at.desc()).all()
+    return render_template("efd_request_workplace.html", requests=rows)
+
+@app.route("/efd-requests/<int:request_id>")
+def efd_request_detail(request_id):
+    if session.get("role") not in ("tax", "initiator"): return redirect(url_for("home"))
+    item=EFDInvoiceRequest.query.get_or_404(request_id)
+    if session.get("role") == "initiator" and item.requester_email != _initiator_email(): abort(403)
+    preview=[]
+    try:
+        from docx import Document
+        doc=Document(BytesIO(item.original_file_data))
+        preview.extend(p.text for p in doc.paragraphs if p.text.strip())
+        for table in doc.tables:
+            for row in table.rows:
+                preview.append(" | ".join(cell.text.strip() for cell in row.cells))
+    except Exception:
+        preview=["Inline preview unavailable for this Word format; use the open/view link."]
+    return render_template("efd_request_detail.html", item=item, original_preview=preview)
+
+@app.route("/efd-requests/<int:request_id>/original")
+def efd_request_original(request_id):
+    if session.get("role") not in ("tax", "initiator"): abort(403)
+    item=EFDInvoiceRequest.query.get_or_404(request_id)
+    if session.get("role") == "initiator" and item.requester_email != _initiator_email(): abort(403)
+    return send_file(BytesIO(item.original_file_data), download_name=item.original_filename, as_attachment=False)
+
+@app.route("/efd-requests/<int:request_id>/processed")
+def efd_request_processed(request_id):
+    if session.get("role") not in ("tax", "initiator"): abort(403)
+    item=EFDInvoiceRequest.query.get_or_404(request_id)
+    if session.get("role") == "initiator" and item.requester_email != _initiator_email(): abort(403)
+    if not item.processed_file_data: abort(404)
+    return send_file(BytesIO(item.processed_file_data), download_name=item.processed_filename or "processed_invoice.docx", as_attachment=True)
+
+@app.route("/efd-requests/<int:request_id>/process", methods=["POST"])
+def efd_request_process(request_id):
+    if session.get("role") != "tax": abort(403)
+    item=EFDInvoiceRequest.query.get_or_404(request_id)
+    code=request.form.get("verification_code", "").strip(); receipt=request.form.get("receipt_time", "").strip()
+    processed=request.files.get("processed_file")
+    if not code or not receipt or not processed or not processed.filename:
+        flash("Verification code, receipt time and processed invoice are all required.", "warning"); return redirect(url_for("efd_request_detail", request_id=item.id))
+    fname=secure_filename(processed.filename); ext=fname.rsplit(".",1)[-1].lower() if "." in fname else ""
+    data=processed.read(EFD_REQUEST_MAX_BYTES+1)
+    if ext not in EFD_REQUEST_ALLOWED or len(data)>EFD_REQUEST_MAX_BYTES:
+        flash("Processed invoice must be a Word file up to 15 MB.", "danger"); return redirect(url_for("efd_request_detail", request_id=item.id))
+    item.verification_code=code; item.receipt_time=receipt; item.processed_filename=fname; item.processed_file_data=data
+    item.status="Completed"; item.updated_at=datetime.utcnow(); db.session.commit()
+    subject=f"Your EFD invoice request has been processed: {item.reference}"
+    body=f"Your EFD invoice request has been processed and is ready for download in CETTP.\n\nRequest: {item.reference}\nSupplier: {item.supplier_name}\nVerification code: {code}\nReceipt time: {receipt}\n\nLog in to the Initiator Portal and open your request to download the processed invoice."
+    _central_send_email("efd_invoice_requests", "request_processed", subject, body, recipients=[item.requester_email], reference_id=item.id)
+    flash("Request processed and requester notified.", "success"); return redirect(url_for("efd_request_detail", request_id=item.id))
+
 # Tax Compliance Calendar & Monitoring
 # ---------------------------------------------------------------------------
 TAX_DEADLINE_STATUSES = ["Upcoming", "In Progress", "Pending Review", "Filed - Payment Pending", "Completed", "Not Applicable"]
@@ -3199,102 +3324,45 @@ def inject_globals():
             "unread_notification_count": unread_notification_count, "initiator_unread_count": initiator_unread_count}
 
 def _run_safe_startup_migrations():
-    """Apply additive, idempotent schema repairs for existing deployments.
+    """Apply narrowly scoped, idempotent schema repairs for existing deployments.
 
-    portal_email_logs has evolved over several releases. SQLAlchemy create_all()
-    does not add columns to an existing table, so this migration adds every
-    model column that may be absent. Existing rows are retained and populated
-    with safe legacy defaults; no table or email-log record is deleted.
+    This migration only adds the missing PortalEmailLog.module column and its
+    index. It never drops, truncates, recreates, or rewrites existing records.
     """
     try:
         inspector = inspect(db.engine)
         if not inspector.has_table("portal_email_logs"):
+            # db.create_all() should have created it; fail visibly if it did not.
             logger.warning("Startup migration skipped: portal_email_logs table not found")
             return
 
-        # Definitions intentionally include safe defaults for required fields,
-        # allowing ALTER TABLE on a populated production table.
-        required_columns = {
-            "module": "VARCHAR(80) NOT NULL DEFAULT 'general'",
-            "event_type": "VARCHAR(100) NOT NULL DEFAULT 'notification'",
-            "event_key": "VARCHAR(100) NOT NULL DEFAULT 'legacy'",
-            "reference_id": "INTEGER",
-            "recipient": "VARCHAR(1000) NOT NULL DEFAULT ''",
-            "subject": "VARCHAR(255) NOT NULL DEFAULT ''",
-            "status": "VARCHAR(30) NOT NULL DEFAULT 'unknown'",
-            "attempts": "INTEGER NOT NULL DEFAULT 0",
-            "error_message": "VARCHAR(2000)",
-            "created_at": "TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP",
-            "sent_at": "TIMESTAMP",
-        }
-
         columns = {column["name"] for column in inspector.get_columns("portal_email_logs")}
-        for column_name, definition in required_columns.items():
-            if column_name not in columns:
-                logger.warning(
-                    "Applying startup migration: adding portal_email_logs.%s",
-                    column_name,
-                )
-                with db.engine.begin() as connection:
-                    connection.execute(text(
-                        f"ALTER TABLE portal_email_logs ADD COLUMN {column_name} {definition}"
-                    ))
-                columns.add(column_name)
+        if "module" not in columns:
+            logger.warning("Applying startup migration: adding portal_email_logs.module")
+            with db.engine.begin() as connection:
+                connection.execute(text(
+                    "ALTER TABLE portal_email_logs "
+                    "ADD COLUMN module VARCHAR(80) NOT NULL DEFAULT 'general'"
+                ))
 
-        # Backfill nullable/legacy values before enforcing model constraints.
+        # Keep any legacy NULL values safe if the column was previously added
+        # manually without a NOT NULL constraint.
         with db.engine.begin() as connection:
             connection.execute(text(
                 "UPDATE portal_email_logs SET module = 'general' WHERE module IS NULL"
             ))
-            connection.execute(text(
-                "UPDATE portal_email_logs SET event_type = COALESCE(NULLIF(event_type, ''), event_key, 'notification') WHERE event_type IS NULL OR event_type = ''"
-            ))
-            connection.execute(text(
-                "UPDATE portal_email_logs SET event_key = 'legacy' WHERE event_key IS NULL"
-            ))
-            connection.execute(text(
-                "UPDATE portal_email_logs SET recipient = '' WHERE recipient IS NULL"
-            ))
-            connection.execute(text(
-                "UPDATE portal_email_logs SET subject = '' WHERE subject IS NULL"
-            ))
-            connection.execute(text(
-                "UPDATE portal_email_logs SET status = 'unknown' WHERE status IS NULL"
-            ))
-            connection.execute(text(
-                "UPDATE portal_email_logs SET attempts = 0 WHERE attempts IS NULL"
-            ))
-            connection.execute(text(
-                "UPDATE portal_email_logs SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"
-            ))
-
             if db.engine.dialect.name == "postgresql":
-                for column_name in (
-                    "module", "event_type", "event_key", "recipient", "subject",
-                    "status", "attempts", "created_at",
-                ):
-                    connection.execute(text(
-                        f"ALTER TABLE portal_email_logs ALTER COLUMN {column_name} SET NOT NULL"
-                    ))
-
-            indexes = {
-                "ix_portal_email_logs_module": "module",
-                "ix_portal_email_logs_event_type": "event_type",
-                "ix_portal_email_logs_event_key": "event_key",
-                "ix_portal_email_logs_reference_id": "reference_id",
-                "ix_portal_email_logs_status": "status",
-                "ix_portal_email_logs_created_at": "created_at",
-            }
-            for index_name, column_name in indexes.items():
                 connection.execute(text(
-                    f"CREATE INDEX IF NOT EXISTS {index_name} "
-                    f"ON portal_email_logs ({column_name})"
+                    "ALTER TABLE portal_email_logs ALTER COLUMN module SET NOT NULL"
                 ))
-
-        logger.info("Portal email log schema check completed (all expected columns verified)")
+            connection.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_portal_email_logs_module "
+                "ON portal_email_logs (module)"
+            ))
+        logger.info("Portal email log schema check completed")
     except Exception:
-        # Do not prevent the whole portal from starting; keep the traceback in
-        # Render logs so database permission/schema issues can be diagnosed.
+        # Do not prevent the whole portal from starting; the traceback is
+        # recorded so a failed migration can be diagnosed from Render logs.
         logger.exception("Portal email log startup migration failed")
 
 
