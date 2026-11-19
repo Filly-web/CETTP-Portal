@@ -220,7 +220,8 @@ def dashboard():
             "FROM processing_history ORDER BY id DESC LIMIT 8"
         ).fetchall()
 
-    return render_template("efd_portal/index.html", total=total, today=today, recent=recent)
+    return render_template("efd_portal/index.html", total=total, today=today, recent=recent,
+                           return_request_id=request.args.get("return_request_id", type=int))
 
 
 @efd_bp.route("/process", methods=["POST"])

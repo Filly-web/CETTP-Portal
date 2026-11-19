@@ -2154,13 +2154,13 @@ def _efd_request_ref():
 
 @app.route("/efd-requests/new", methods=["GET", "POST"])
 def efd_request_new():
-    if session.get("role") != "initiator": return redirect(url_for("home"))
+    if session.get("role") != "initiator":
+        return redirect(url_for("home"))
     if request.method == "POST":
         upload = request.files.get("invoice_file")
-        supplier = request.form.get("supplier_name", "").strip()
-        purpose = request.form.get("purpose", "").strip()
-        if not upload or not upload.filename or not supplier or not purpose:
-            flash("Supplier name, purpose and mandatory Word invoice are required.", "warning")
+        customer = request.form.get("customer_name", "").strip()
+        if not customer or not upload or not upload.filename:
+            flash("Customer name and mandatory Word invoice are required.", "warning")
             return redirect(url_for("efd_request_new"))
         filename = secure_filename(upload.filename)
         ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
@@ -2168,21 +2168,22 @@ def efd_request_new():
         if ext not in EFD_REQUEST_ALLOWED or len(data) > EFD_REQUEST_MAX_BYTES:
             flash("Attach a Word document (.doc or .docx) up to 15 MB.", "danger")
             return redirect(url_for("efd_request_new"))
-        try:
-            invoice_date = date.fromisoformat(request.form.get("invoice_date")) if request.form.get("invoice_date") else None
-            amount = Decimal(request.form.get("amount")) if request.form.get("amount", "").strip() else None
-        except (ValueError, InvalidOperation):
-            flash("Please check the invoice date or amount.", "danger"); return redirect(url_for("efd_request_new"))
         email = _initiator_email()
-        item = EFDInvoiceRequest(reference=_efd_request_ref(), requester_email=email, requester_name=session.get("actor_name", email),
-            supplier_name=supplier, supplier_tin=request.form.get("supplier_tin", "").strip() or None,
-            invoice_number=request.form.get("invoice_number", "").strip() or None, invoice_date=invoice_date, amount=amount,
-            currency=request.form.get("currency", "TZS").strip() or "TZS", purpose=purpose, original_filename=filename, original_file_data=data, status="Pending")
-        db.session.add(item); db.session.commit()
-        subject=f"New EFD invoice request: {item.reference}"
-        body=f"A new EFD invoice request has been submitted.\n\nRequest: {item.reference}\nRequester: {item.requester_name} ({email})\nSupplier: {supplier}\nInvoice No: {item.invoice_number or 'Not provided'}\nPurpose: {purpose}\n\nLog in to CETTP Tax Compliance Workplace to review and process the request."
-        _central_send_email("efd_invoice_requests", "request_submitted", subject, body, recipients=["faugusti@britam.co.tz"], reference_id=item.id)
-        flash(f"EFD invoice request {item.reference} submitted successfully.", "success")
+        item = EFDInvoiceRequest(reference=_efd_request_ref(), requester_email=email,
+            requester_name=session.get("actor_name", email), supplier_name=customer,
+            purpose="", original_filename=filename, original_file_data=data, status="Pending")
+        db.session.add(item)
+        db.session.commit()
+        subject = f"New EFD invoice request: {item.reference}"
+        body = (f"A new EFD invoice request has been submitted.\\n\\nRequest: {item.reference}"
+                f"\\nCustomer: {customer}\\nRequester: {item.requester_name} ({email})"
+                f"\\n\\nLog in to CETTP Tax Compliance Workplace to review and process the request.")
+        email_ok, email_error = _central_send_email("efd_invoice_requests", "request_submitted",
+            subject, body, recipients=["faugusti@britam.co.tz"], reference_id=item.id)
+        if email_ok:
+            flash(f"Request {item.reference} submitted. Tax Compliance was notified.", "success")
+        else:
+            flash(f"Request {item.reference} was saved, BUT email to faugusti@britam.co.tz failed: {email_error}", "danger")
         return redirect(url_for("efd_request_my"))
     return render_template("efd_request_new.html")
 
@@ -2246,8 +2247,39 @@ def efd_request_process(request_id):
     item.status="Completed"; item.updated_at=datetime.utcnow(); db.session.commit()
     subject=f"Your EFD invoice request has been processed: {item.reference}"
     body=f"Your EFD invoice request has been processed and is ready for download in CETTP.\n\nRequest: {item.reference}\nSupplier: {item.supplier_name}\nVerification code: {code}\nReceipt time: {receipt}\n\nLog in to the Initiator Portal and open your request to download the processed invoice."
-    _central_send_email("efd_invoice_requests", "request_processed", subject, body, recipients=[item.requester_email], reference_id=item.id)
-    flash("Request processed and requester notified.", "success"); return redirect(url_for("efd_request_detail", request_id=item.id))
+    email_ok, email_error = _central_send_email("efd_invoice_requests", "request_processed", subject, body,
+        recipients=[item.requester_email], reference_id=item.id)
+    if email_ok:
+        flash("Request completed and notification sent to the initiator.", "success")
+    else:
+        flash(f"Invoice saved and request completed, BUT notification to {item.requester_email} failed: {email_error}", "danger")
+    return redirect(url_for("efd_request_detail", request_id=item.id))
+
+@app.route("/efd-requests/<int:request_id>/retry-email", methods=["POST"])
+def efd_request_retry_email(request_id):
+    if session.get("role") != "tax":
+        abort(403)
+    item = EFDInvoiceRequest.query.get_or_404(request_id)
+    if item.processed_file_data:
+        subject = f"Your EFD invoice request has been processed: {item.reference}"
+        body = (f"Your EFD invoice request has been processed and is ready for download in CETTP.\\n\\n"
+                f"Request: {item.reference}\\nCustomer: {item.supplier_name}\\n"
+                f"Log in to the Initiator Portal and open your request to download the processed invoice.")
+        event_key = "request_processed_retry"
+        recipients = [item.requester_email]
+    else:
+        subject = f"New EFD invoice request: {item.reference}"
+        body = (f"A new EFD invoice request is awaiting Tax Compliance review.\\n\\n"
+                f"Request: {item.reference}\\nCustomer: {item.supplier_name}\\n"
+                f"Requester: {item.requester_email}\\nOpen the CETTP Tax Compliance Workplace.")
+        event_key = "request_submitted_retry"
+        recipients = ["faugusti@britam.co.tz"]
+    ok, error = _central_send_email("efd_invoice_requests", event_key, subject, body,
+        recipients=recipients, reference_id=item.id)
+    flash("Completion email sent successfully." if ok else f"Email retry failed: {error}",
+          "success" if ok else "danger")
+    return redirect(url_for("efd_request_detail", request_id=item.id))
+
 
 # Tax Compliance Calendar & Monitoring
 # ---------------------------------------------------------------------------

@@ -29,6 +29,14 @@
   <div class="main">
     <header class="topbar"><div><div class="crumb">Workspace / Dashboard</div><div class="top-title">EFD Invoice Workspace</div></div><div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap"><a href="/" class="btn btn-secondary" style="padding:9px 13px">← Back to CETTP Portal</a><div class="user"><div class="avatar">TC</div><div><div class="user-name">Tax Compliance</div><div class="user-role">Britam Insurance (T) Ltd</div></div></div></div></header>
     <main class="content">
+    {% if return_request_id %}
+    <div class="panel" style="margin-bottom:18px;border:2px solid #168653">
+      <h2>Returning an EFD Invoice Request</h2>
+      <p class="panel-intro">After processing and downloading the invoice with its EFD barcode, return to CETTP and upload the processed document to the originating request.</p>
+      <a class="btn" style="display:inline-block;background:#168653;color:#fff;padding:10px 16px;border-radius:8px" href="{{ url_for('efd_request_detail', request_id=return_request_id) }}">Return to Request {{ return_request_id }} in CETTP</a>
+    </div>
+    {% endif %}
+
       {% with messages = get_flashed_messages(with_categories=true) %}{% for category, message in messages %}<div class="flash {{ category }}" role="alert">{{ message }}</div>{% endfor %}{% endwith %}
       <section class="welcome"><div><div class="eyebrow">Welcome back</div><h1>Welcome to Britam EFD Portal</h1><p>Prepare your invoice documents with TRA verification details and a QR code in a few simple steps.</p></div><div class="welcome-badge"><span class="shield">✓</span>Accurate details.<br>Clear verification.</div></section>
       <section class="stats" aria-label="Portal statistics">
