@@ -603,32 +603,15 @@ def _notification_recipients():
 
 
 def _central_send_email(module, event_key, subject, body, recipients=None, reference_id=None):
-    """Single outbound email transport and audit path for every CETTP module.
+    """Send email independently of best-effort audit persistence.
 
-    Yahoo SMTP is the default. Credentials are read only from Render environment
-    variables; no credential or app password is embedded in the source.
-    Returns (success, error_message).
+    A failure to write the audit row must never prevent the SMTP attempt.
+    Returns (delivered, error_message). Delivery is successful only after
+    SMTP send_message completes without raising an exception.
     """
-    recipients = recipients or _notification_recipients()
-    recipients = [str(x).strip() for x in recipients if str(x).strip()]
+    recipients = recipients if recipients is not None else _notification_recipients()
+    recipients = [str(x).strip() for x in (recipients or []) if str(x).strip()]
     recipient_label = ", ".join(recipients) if recipients else "NOT_CONFIGURED"
-    log = PortalEmailLog(module=(module or "portal")[:80], event_key=(event_key or "notification")[:100],
-        reference_id=reference_id, recipient=recipient_label[:1000], subject=(subject or "CETTP notification")[:255], status="pending", attempts=0)
-    db.session.add(log)
-    try:
-        db.session.flush()
-    except Exception:
-        db.session.rollback()
-        logger.exception("Unable to create central email audit record")
-        return False, "Unable to create email audit record."
-
-    if not recipients:
-        log.status = "not_configured"
-        log.error_message = "No recipient configured. Set CETTP_TAX_COMPLIANCE_EMAIL or a module-specific recipient."
-        db.session.commit()
-        logger.warning("Email not sent: no recipients configured (module=%s event=%s)", module, event_key)
-        return False, log.error_message
-
     host = os.environ.get("SMTP_HOST", "smtp.mail.yahoo.com").strip()
     try:
         port = int(os.environ.get("SMTP_PORT", "587"))
@@ -642,51 +625,74 @@ def _central_send_email(module, event_key, subject, body, recipients=None, refer
     except (TypeError, ValueError):
         timeout = 15
 
-
-    if not username or not password or not sender:
-        log.status = "not_configured"
-        log.error_message = "SMTP credentials incomplete. Set SMTP_USERNAME, SMTP_PASSWORD and SMTP_FROM in Render."
-        db.session.commit()
-        return False, log.error_message
-
-    message = EmailMessage()
-    message["Subject"] = subject or "CETTP notification"
-    message["From"] = sender
-    message["To"] = recipients[0]
-    if len(recipients) > 1:
-        message["Cc"] = ", ".join(recipients[1:])
-    message.set_content(body or "")
-
-    log.attempts = 1
-    try:
-        context = ssl.create_default_context()
-        if port == 465 or os.environ.get("SMTP_USE_SSL", "").strip().lower() in {"1", "true", "yes"}:
-            with smtplib.SMTP_SSL(host, port, timeout=timeout, context=context) as server:
-                server.ehlo()
-                server.login(username, password)
-                server.send_message(message)
-        else:
-            with smtplib.SMTP(host, port, timeout=timeout) as server:
-                server.ehlo()
-                if os.environ.get("SMTP_STARTTLS", "true").strip().lower() not in {"0", "false", "no"}:
-                    server.starttls(context=context)
+    delivered = False
+    delivery_error = None
+    if not recipients:
+        delivery_error = "No recipient configured."
+    elif not username or not password or not sender:
+        delivery_error = "SMTP credentials incomplete. Set SMTP_USERNAME, SMTP_PASSWORD and SMTP_FROM in Render."
+    else:
+        message = EmailMessage()
+        message["Subject"] = subject or "CETTP notification"
+        message["From"] = sender
+        message["To"] = recipients[0]
+        if len(recipients) > 1:
+            message["Cc"] = ", ".join(recipients[1:])
+        message.set_content(body or "")
+        try:
+            context = ssl.create_default_context()
+            if port == 465 or os.environ.get("SMTP_USE_SSL", "").strip().lower() in {"1", "true", "yes"}:
+                with smtplib.SMTP_SSL(host, port, timeout=timeout, context=context) as server:
                     server.ehlo()
-                server.login(username, password)
-                server.send_message(message)
-        log.status = "sent"
-        log.sent_at = datetime.utcnow()
-        log.error_message = None
-        db.session.commit()
-        logger.info("Central email delivered module=%s event=%s recipient_count=%s", module, event_key, len(recipients))
-        return True, None
-    except Exception as exc:
-        error = f"{type(exc).__name__}: {str(exc)[:1500]}"
-        log.status = "failed"
-        log.error_message = error[:2000]
-        db.session.commit()
-        logger.exception("Central email failed module=%s event=%s", module, event_key)
-        return False, error
+                    server.login(username, password)
+                    server.send_message(message)
+            else:
+                with smtplib.SMTP(host, port, timeout=timeout) as server:
+                    server.ehlo()
+                    if os.environ.get("SMTP_STARTTLS", "true").strip().lower() not in {"0", "false", "no"}:
+                        server.starttls(context=context)
+                        server.ehlo()
+                    server.login(username, password)
+                    server.send_message(message)
+            delivered = True
+        except Exception as exc:
+            delivery_error = f"{type(exc).__name__}: {str(exc)[:1500]}"
+            logger.exception("Central email delivery failed module=%s event=%s recipient=%s",
+                             module, event_key, recipient_label)
 
+    # Audit persistence is deliberately separate from delivery. A broken audit
+    # schema/transaction must not suppress an otherwise deliverable email.
+    try:
+        log = PortalEmailLog(
+            module=(module or "portal")[:80],
+            event_key=(event_key or "notification")[:100],
+            reference_id=reference_id,
+            recipient=recipient_label[:1000],
+            subject=(subject or "CETTP notification")[:255],
+            status=("sent" if delivered else
+                    ("not_configured" if delivery_error and
+                     any(k in delivery_error.lower() for k in ("no recipient", "not configured", "incomplete"))
+                     else "failed")),
+            attempts=1 if recipients and username and password and sender else 0,
+            error_message=(delivery_error[:2000] if delivery_error else None),
+            sent_at=(datetime.utcnow() if delivered else None),
+        )
+        db.session.add(log)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception(
+            "Email was %s but central audit record could not be saved "
+            "(module=%s event=%s recipient=%s reference_id=%s)",
+            "delivered" if delivered else "not delivered",
+            module, event_key, recipient_label, reference_id
+        )
+
+    if delivered:
+        logger.info("Central email delivered module=%s event=%s recipient_count=%s",
+                    module, event_key, len(recipients))
+        return True, None
+    return False, delivery_error or "Email delivery failed."
 
 def send_new_request_notification(case):
     """Log and send one notification per initiated case via the central email service."""
@@ -3369,28 +3375,59 @@ def _run_safe_startup_migrations():
             return
 
         columns = {column["name"] for column in inspector.get_columns("portal_email_logs")}
-        if "module" not in columns:
-            logger.warning("Applying startup migration: adding portal_email_logs.module")
-            with db.engine.begin() as connection:
-                connection.execute(text(
-                    "ALTER TABLE portal_email_logs "
-                    "ADD COLUMN module VARCHAR(80) NOT NULL DEFAULT 'general'"
-                ))
-
-        # Keep any legacy NULL values safe if the column was previously added
-        # manually without a NOT NULL constraint.
+        # Additive compatibility migration for legacy email-log tables.
+        # Existing rows and all unrelated tables are preserved.
+        required_columns = {
+            "module": "VARCHAR(80)",
+            "event_key": "VARCHAR(100)",
+            "reference_id": "INTEGER",
+            "recipient": "VARCHAR(1000)",
+            "subject": "VARCHAR(255)",
+            "status": "VARCHAR(30)",
+            "attempts": "INTEGER",
+            "error_message": "VARCHAR(2000)",
+            "created_at": "TIMESTAMP",
+            "sent_at": "TIMESTAMP",
+        }
         with db.engine.begin() as connection:
+            for column_name, sql_type in required_columns.items():
+                if column_name not in columns:
+                    logger.warning("Applying additive migration: portal_email_logs.%s", column_name)
+                    connection.execute(text(
+                        f"ALTER TABLE portal_email_logs ADD COLUMN {column_name} {sql_type}"
+                    ))
+            # Populate safe values for legacy rows before application reads them.
             connection.execute(text(
-                "UPDATE portal_email_logs SET module = 'general' WHERE module IS NULL"
+                "UPDATE portal_email_logs SET module='general' WHERE module IS NULL"
             ))
-            if db.engine.dialect.name == "postgresql":
-                connection.execute(text(
-                    "ALTER TABLE portal_email_logs ALTER COLUMN module SET NOT NULL"
-                ))
             connection.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_portal_email_logs_module "
-                "ON portal_email_logs (module)"
+                "UPDATE portal_email_logs SET event_key='legacy' WHERE event_key IS NULL"
             ))
+            connection.execute(text(
+                "UPDATE portal_email_logs SET recipient='UNKNOWN' WHERE recipient IS NULL"
+            ))
+            connection.execute(text(
+                "UPDATE portal_email_logs SET subject='Legacy notification' WHERE subject IS NULL"
+            ))
+            connection.execute(text(
+                "UPDATE portal_email_logs SET status='unknown' WHERE status IS NULL"
+            ))
+            connection.execute(text(
+                "UPDATE portal_email_logs SET attempts=0 WHERE attempts IS NULL"
+            ))
+            connection.execute(text(
+                "UPDATE portal_email_logs SET created_at=CURRENT_TIMESTAMP WHERE created_at IS NULL"
+            ))
+            connection.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_portal_email_logs_module ON portal_email_logs (module)"
+            ))
+            connection.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_portal_email_logs_event_key ON portal_email_logs (event_key)"
+            ))
+            connection.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_portal_email_logs_status ON portal_email_logs (status)"
+            ))
+        logger.info("Portal email log schema compatibility check completed")
         logger.info("Portal email log schema check completed")
     except Exception:
         # Do not prevent the whole portal from starting; the traceback is
