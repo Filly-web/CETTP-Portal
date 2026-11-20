@@ -3259,6 +3259,26 @@ def tax_vat_control_upload():
         return redirect(url_for("tax_vat_control"))
 
 
+@app.route("/tax-vat-control/upload/<int:upload_id>/delete", methods=["POST"])
+def tax_vat_control_delete_upload(upload_id):
+    if not _tax_required():
+        return redirect(url_for("home"))
+    upload = VatLedgerUpload.query.get_or_404(upload_id)
+    # Explicitly remove only rows belonging to this imported workbook; VAT returns and manual movements are retained.
+    entry_count = VatLedgerEntry.query.filter_by(upload_id=upload.id).count()
+    balance_count = VatLedgerPeriodBalance.query.filter_by(upload_id=upload.id).count()
+    filename = upload.filename
+    db.session.add(VatAuditLog(actor=_vat_actor_name(), action="VAT ERP upload deleted", record_type="upload", record_id=upload.id,
+        details=f"Deleted upload {filename}; {entry_count} transaction rows and {balance_count} monthly balances removed."))
+    VatLedgerEntry.query.filter_by(upload_id=upload.id).delete(synchronize_session=False)
+    VatLedgerPeriodBalance.query.filter_by(upload_id=upload.id).delete(synchronize_session=False)
+    db.session.delete(upload)
+    db.session.commit()
+    flash(f"VAT ERP import batch #{upload_id} ({filename}) deleted, including its imported ledger rows and monthly balances. Manual movements and TRA return records were preserved.", "success")
+    return redirect(url_for("tax_vat_control"))
+
+
+
 @app.route("/tax-vat-control/entry/<int:entry_id>/classify", methods=["POST"])
 def tax_vat_control_classify(entry_id):
     if not _tax_required(): return redirect(url_for("home"))

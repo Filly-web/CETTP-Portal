@@ -1,4 +1,4 @@
-# Britam CETTP V3.3.0 – Tax & Compliance Portal
+# Britam CETTP V3.6.0 – Tax & Compliance Portal
 
 Integrated internal portal for cancellation and endorsement tracking plus VAT and WHT reconciliation workflows.
 
@@ -39,8 +39,8 @@ Open http://127.0.0.1:5000.
 - Database migrations: `flask db init` (once), `flask db migrate -m "initial schema"`, `flask db upgrade`. The application currently calls `db.create_all()` on startup for simple first-run development; for controlled production schema evolution, remove that startup call after initializing migrations and use release/deploy migration commands.
 
 
-## Visual design refresh
-The interface now uses a branded blue header, navy workspace sidebar, colorful KPI cards, a blue welcome banner, colored charts, polished forms, responsive layouts and updated navigation styling. The UI uses Bootstrap 5 and Chart.js via CDN, so an internet connection is required for those assets unless they are self-hosted.
+## Corporate visual redesign (V3.6.0)
+The portal now uses a corporate navy-and-blue visual identity across the workspace selector, role access screens, shared application shell, navigation, dashboards and internal page components. Forms, tables, cards, alerts, buttons, modals and responsive layouts use a consistent design system. The standalone EFD Invoice Portal palette has also been aligned. Existing authentication behavior, workflows, route permissions, database models and production configuration are retained. See `CHANGELOG_V3_6_0_CORPORATE_VISUAL_REDESIGN.md` for release scope and validation boundaries.
 
 ## Reconciliation upload template
 Download the VAT or WHT CSV template from the reconciliation screen. Required columns are `period`, `source`, `book_amount`, and `tra_amount`. Optional columns are `reference`, `counterparty`, `category`, and `notes`. XLSX uploads read the first worksheet and first row as column headers. Amounts are interpreted as TZS and row variance is Books minus TRA. Uploads append data; check for duplicates before importing.

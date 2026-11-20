@@ -1,22 +1,2 @@
-{% extends "base.html" %}
-{% block title %}Initiator Access | CETTP{% endblock %}
-{% block content %}
-<div class="row justify-content-center py-4">
-  <div class="col-md-7 col-lg-5">
-    <div class="card border-0 shadow-sm">
-      <div class="card-body p-4 p-md-5">
-        <div class="eyebrow">INITIATOR WORKSPACE</div>
-        <h1 class="h3 mb-2">Continue with your email</h1>
-        <p class="text-muted">Use your work email address as your username. No password, OTP, or verification code is required.</p>
-        <form method="post">
-          <label for="email" class="form-label">Work email address</label>
-          <input id="email" name="email" type="email" class="form-control mb-3" placeholder="name@company.com" autocomplete="email" required maxlength="254" autofocus>
-          <button class="btn btn-primary btn-sm w-100" type="submit">Continue to CETTP <span class="float-end">→</span></button>
-        </form>
-        <div class="alert alert-warning small mt-4 mb-0" role="alert"><strong>Pilot access:</strong> No password or email verification is currently required. Anyone who knows an email address could enter it, so this mode records identity but does not verify it. Use only in a controlled test environment until approved authentication is added.</div>
-      </div>
-    </div>
-    <div class="text-center mt-3"><a href="{{ url_for('home') }}" class="small">← Back to role selection</a></div>
-  </div>
-</div>
-{% endblock %}
+{% extends "base.html" %}{% block title %}Initiator Access | CETTP{% endblock %}
+{% block content %}<section class="access-stage"><div class="access-aside"><span class="access-aside-mark">B</span><span class="login-eyebrow">INITIATOR WORKSPACE</span><h1>Move your requests forward.</h1><p>Submit new cases, request EFD invoices and follow the progress of your submissions.</p><a href="{{ url_for('home') }}"><i class="bi bi-arrow-left"></i> Back to workspace selection</a></div><div class="access-form-panel"><div class="access-form-inner"><span class="login-eyebrow dark">STAFF ACCESS</span><h2>Continue with your email</h2><p class="login-lead">Use your Britam work email address to identify your workspace.</p><form method="post"><label for="email" class="form-label">Work email address</label><input id="email" name="email" type="email" class="form-control form-control-lg mb-3" placeholder="name@britam.co.tz" autocomplete="email" required maxlength="254" autofocus><button class="btn btn-primary w-100" type="submit">Continue to CETTP <i class="bi bi-arrow-right ms-2"></i></button></form><div class="alert alert-warning small mt-4 mb-0" role="alert"><strong>Pilot access notice:</strong> This email-only mode does not verify ownership of the email address. Use only in a controlled test environment until approved authentication is implemented.</div></div></div></section>{% endblock %}

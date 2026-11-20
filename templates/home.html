@@ -1,19 +1,21 @@
-{% extends "base.html" %}{% block title %}CETTP | Choose Workspace{% endblock %}
+{% extends "base.html" %}{% block title %}CETTP | Sign in{% endblock %}
 {% block content %}
-<section class="home-hero">
-  <div><div class="eyebrow light">BRITAM · TAX &amp; COMPLIANCE</div><h1>Karibu Britam Tax Portal.</h1><p>Choose where you want to work.</p></div>
-  <div class="home-hero-mark"><span>B</span></div>
+<section class="login-stage">
+ <div class="login-brand-panel">
+  <div class="login-brand-lockup"><span class="login-brand-mark">B</span><span>BRITAM<small>INSURANCE · TANZANIA</small></span></div>
+  <div class="login-brand-copy"><span class="login-eyebrow">CORPORATE TAX OPERATIONS</span><h1>Tax compliance.<br>Under control.</h1><p>A central workspace for tax administration, reconciliation, requests and compliance oversight.</p></div>
+  <div class="login-brand-footer"><span class="brand-stripe"><i></i><i></i><i></i></span><span>With you every step of the way.</span></div>
+ </div>
+ <div class="login-choice-panel">
+  <div class="login-choice-inner"><div class="login-eyebrow dark">CETTP · SECURE WORKSPACE</div><h2>Karibu Britam Tax Portal</h2><p class="login-lead">Choose your workspace to continue.</p>
+   <div class="login-workspace-list">
+    <a class="login-workspace" href="{{ url_for('enter_initiator_role') }}"><span class="login-workspace-icon staff"><i class="bi bi-person-workspace"></i></span><span><strong>Initiator</strong><small>Submit and track requests</small></span><i class="bi bi-arrow-up-right"></i></a>
+    <a class="login-workspace" href="{{ url_for('enter_tax_role') }}"><span class="login-workspace-icon tax"><i class="bi bi-shield-check"></i></span><span><strong>Tax Compliance</strong><small>Review, reconcile and manage tax activities</small></span><i class="bi bi-arrow-up-right"></i></a>
+    <a class="login-workspace" href="{{ url_for('efd_portal.dashboard') }}"><span class="login-workspace-icon efd"><i class="bi bi-receipt-cutoff"></i></span><span><strong>EFD Invoice</strong><small>Prepare and process invoice documents</small></span><i class="bi bi-arrow-up-right"></i></a>
+   </div>
+   <div class="login-security-note"><i class="bi bi-info-circle"></i><span>Access to each workspace is governed by its assigned access controls.</span></div>
+   <div class="login-version">CETTP V3.6.0 <span>·</span> Internal use only</div>
+  </div>
+ </div>
 </section>
-<div class="workspace-grid">
-  <a class="workspace-tile tile-initiator" href="{{ url_for('enter_initiator_role') }}">
-    <span class="workspace-icon"><i class="bi bi-person-plus"></i>＋</span><span class="workspace-kicker">STAFF WORKSPACE</span><h2>Initiator</h2><p>Submit and track requests.</p><span class="workspace-go">Continue <b>→</b></span>
-  </a>
-  <a class="workspace-tile tile-tax" href="{{ url_for('enter_tax_role') }}">
-    <span class="workspace-icon">✓</span><span class="workspace-kicker">TAX TEAM</span><h2>Tax Compliance</h2><p>Review requests and manage tax activities.</p><span class="workspace-go">Continue <b>→</b></span>
-  </a>
-  <a class="workspace-tile tile-efd" href="{{ url_for('efd_portal.dashboard') }}">
-    <span class="workspace-icon">▣</span><span class="workspace-kicker">INVOICE SUPPORT</span><h2>EFD Invoice</h2><p>Prepare and process invoice documents.</p><span class="workspace-go">Open portal <b>→</b></span>
-  </a>
-</div>
-<div class="home-footnote"><span class="home-footnote-mark">i</span><span>Use your assigned workspace. Access is controlled by your role.</span></div>
 {% endblock %}
