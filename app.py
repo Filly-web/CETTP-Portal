@@ -956,8 +956,7 @@ def login():
             session["user_id"] = user.id
             session["actor_name"] = user.full_name
             session["initiator_email"] = user.email if user.role == "initiator" else ""
-            if user.must_change_password:
-                return redirect(url_for("change_password"))
+            # First-login password changes are optional in this release.
             target = request.args.get("next", "")
             if target.startswith("/") and not target.startswith("//"):
                 return redirect(target)
@@ -976,8 +975,9 @@ def change_password():
     if request.method == "POST":
         new_password = request.form.get("new_password", "")
         confirm = request.form.get("confirm_password", "")
-        if len(new_password) < 12:
-            flash("Password must be at least 12 characters.", "danger")
+        valid_credential = new_password.isdigit() and len(new_password) == 4 if user.role == "initiator" else len(new_password) >= 8
+        if not valid_credential:
+            flash("Initiator PIN must be exactly 4 digits." if user.role == "initiator" else "Password must be at least 8 characters.", "danger")
         elif new_password != confirm:
             flash("Passwords do not match.", "danger")
         else:
@@ -1002,14 +1002,14 @@ def admin_users():
         password = request.form.get("password", "")
         if role not in ("initiator", "tax", "admin"):
             flash("Invalid role selected.", "danger")
-        elif not email or "@" not in email or not name or len(password) < 12:
-            flash("Enter a valid work email, name and password of at least 12 characters.", "danger")
+        elif not email or "@" not in email or not name or (role == "initiator" and not (password.isdigit() and len(password) == 4)) or (role != "initiator" and len(password) < 8):
+            flash("Enter a valid work email and name. Initiators require a 4-digit numeric PIN; Admin and Tax Compliance users require at least 8 characters.", "danger")
         elif CETTPUser.query.filter(func.lower(CETTPUser.email) == email).first():
             flash("A user with that email already exists.", "danger")
         else:
-            new_user = CETTPUser(email=email, full_name=name, role=role, password_hash=generate_password_hash(password), active=True, must_change_password=True, created_by=session.get("actor_name"))
+            new_user = CETTPUser(email=email, full_name=name, role=role, password_hash=generate_password_hash(password), active=True, must_change_password=False, created_by=session.get("actor_name"))
             db.session.add(new_user); db.session.commit()
-            flash("User created. They must change the temporary password at first login.", "success")
+            flash("User account created successfully.", "success")
             return redirect(url_for("admin_users"))
     users = CETTPUser.query.order_by(CETTPUser.role, CETTPUser.full_name).all()
     return render_template("admin_users.html", users=users)
@@ -1050,13 +1050,14 @@ def admin_user_reset_password(user_id):
     _admin_required()
     user = CETTPUser.query.get_or_404(user_id)
     password = request.form.get("password", "")
-    if len(password) < 12:
-        flash("Temporary password must be at least 12 characters.", "danger")
+    valid_credential = password.isdigit() and len(password) == 4 if user.role == "initiator" else len(password) >= 8
+    if not valid_credential:
+        flash("Initiator PIN must be exactly 4 digits." if user.role == "initiator" else "Password must be at least 8 characters.", "danger")
     else:
         user.password_hash = generate_password_hash(password)
-        user.must_change_password = True
+        user.must_change_password = False
         db.session.commit()
-        flash("Password reset. User must change it on next login.", "success")
+        flash("User credential reset successfully. No first-login change is required.", "success")
     return redirect(url_for("admin_users"))
 
 @app.route("/logout")
@@ -3682,13 +3683,13 @@ with app.app_context():
     bootstrap_email = os.environ.get("CETTP_ADMIN_EMAIL", "").strip().lower()
     bootstrap_password = os.environ.get("CETTP_ADMIN_PASSWORD", "")
     bootstrap_name = os.environ.get("CETTP_ADMIN_NAME", "CETTP Administrator").strip() or "CETTP Administrator"
-    if bootstrap_email and len(bootstrap_password) >= 12:
+    if bootstrap_email and len(bootstrap_password) >= 8:
         bootstrap_user = CETTPUser.query.filter(func.lower(CETTPUser.email) == bootstrap_email).first()
         if bootstrap_user is None:
             bootstrap_user = CETTPUser(
                 email=bootstrap_email, full_name=bootstrap_name, role="admin",
                 password_hash=generate_password_hash(bootstrap_password), active=True,
-                must_change_password=True, created_by="environment bootstrap"
+                must_change_password=False, created_by="environment bootstrap"
             )
             db.session.add(bootstrap_user)
             db.session.commit()
@@ -3697,13 +3698,13 @@ with app.app_context():
             bootstrap_user.active = True
             bootstrap_user.role = "admin"
             bootstrap_user.password_hash = generate_password_hash(bootstrap_password)
-            bootstrap_user.must_change_password = True
+            bootstrap_user.must_change_password = False
             if not bootstrap_user.full_name:
                 bootstrap_user.full_name = bootstrap_name
             db.session.commit()
-            logger.warning("Configured environment administrator account was repaired; password change required at next login")
-    elif bootstrap_email and bootstrap_password and len(bootstrap_password) < 12:
-        logger.warning("Initial Admin bootstrap skipped: CETTP_ADMIN_PASSWORD must be at least 12 characters")
+            logger.warning("Configured environment administrator account was repaired")
+    elif bootstrap_email and bootstrap_password and len(bootstrap_password) < 8:
+        logger.warning("Initial Admin bootstrap skipped: CETTP_ADMIN_PASSWORD must be at least 8 characters")
     elif bool(bootstrap_email) != bool(bootstrap_password):
         logger.warning("Initial Admin bootstrap skipped: CETTP_ADMIN_EMAIL and CETTP_ADMIN_PASSWORD must both be set")
     # Additive schema updates for the WHT TIN Matching enhancements.
