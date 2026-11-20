@@ -334,6 +334,18 @@ class EFDInvoiceRequest(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
+class EFDRequestAudit(db.Model):
+    __tablename__ = "efd_request_audit"
+    id = db.Column(db.Integer, primary_key=True)
+    request_id = db.Column(db.Integer, nullable=False, index=True)
+    reference = db.Column(db.String(32), nullable=False)
+    actor = db.Column(db.String(180), nullable=False)
+    action = db.Column(db.String(80), nullable=False)
+    comment = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+
+
 class TaxDeadlineAudit(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     deadline_id = db.Column(db.Integer, db.ForeignKey("tax_deadline.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -2202,7 +2214,7 @@ def efd_request_my():
 @app.route("/efd-requests/workplace")
 def efd_request_workplace():
     if session.get("role") != "tax": return redirect(url_for("home"))
-    rows=EFDInvoiceRequest.query.order_by(EFDInvoiceRequest.created_at.desc()).all()
+    rows=EFDInvoiceRequest.query.filter(EFDInvoiceRequest.status != "Deleted").order_by(EFDInvoiceRequest.created_at.desc()).all()
     return render_template("efd_request_workplace.html", requests=rows)
 
 @app.route("/efd-requests/<int:request_id>")
@@ -2221,6 +2233,103 @@ def efd_request_detail(request_id):
     except Exception:
         preview=["Inline preview unavailable for this Word format; use the open/view link."]
     return render_template("efd_request_detail.html", item=item, original_preview=preview)
+
+@app.route("/efd-requests/<int:request_id>/return", methods=["POST"])
+def efd_request_return(request_id):
+    if session.get("role") != "tax": abort(403)
+    item = EFDInvoiceRequest.query.get_or_404(request_id)
+    if item.status in ("Completed", "Rejected", "Deleted"):
+        flash("This request cannot be returned in its current status.", "warning")
+        return redirect(url_for("efd_request_detail", request_id=item.id))
+    comment = request.form.get("comment", "").strip()
+    if not comment:
+        flash("A return comment is required.", "warning")
+        return redirect(url_for("efd_request_detail", request_id=item.id))
+    item.status = "Returned for Amendment"
+    item.tax_notes = comment
+    item.updated_at = datetime.utcnow()
+    db.session.add(EFDRequestAudit(request_id=item.id, reference=item.reference, actor=session.get("actor_name", "Tax Compliance"), action="Returned for amendment", comment=comment))
+    db.session.commit()
+    subject = f"EFD request returned for amendment: {item.reference}"
+    body = f"Your EFD invoice request was returned for amendment.\n\nRequest: {item.reference}\nCustomer: {item.supplier_name}\nComment from Tax Compliance: {comment}\n\nPlease log in to CETTP, amend the request and resubmit it."
+    ok, err = _central_send_email("efd_invoice_requests", "request_returned", subject, body, recipients=[item.requester_email], reference_id=item.id)
+    flash("Request returned to initiator for amendment." + (" Notification email sent." if ok else f" Email notification failed: {err}"), "success" if ok else "warning")
+    return redirect(url_for("efd_request_detail", request_id=item.id))
+
+@app.route("/efd-requests/<int:request_id>/reject", methods=["POST"])
+def efd_request_reject(request_id):
+    if session.get("role") != "tax": abort(403)
+    item = EFDInvoiceRequest.query.get_or_404(request_id)
+    if item.status in ("Completed", "Rejected", "Deleted"):
+        flash("This request cannot be rejected in its current status.", "warning")
+        return redirect(url_for("efd_request_detail", request_id=item.id))
+    comment = request.form.get("comment", "").strip()
+    if not comment:
+        flash("A rejection comment is required.", "warning")
+        return redirect(url_for("efd_request_detail", request_id=item.id))
+    item.status = "Rejected"
+    item.tax_notes = comment
+    item.updated_at = datetime.utcnow()
+    db.session.add(EFDRequestAudit(request_id=item.id, reference=item.reference, actor=session.get("actor_name", "Tax Compliance"), action="Rejected", comment=comment))
+    db.session.commit()
+    subject = f"EFD request rejected: {item.reference}"
+    body = f"Your EFD invoice request has been rejected.\n\nRequest: {item.reference}\nCustomer: {item.supplier_name}\nReason: {comment}\n\nIf this request is still required, please submit a new request with the correct information."
+    ok, err = _central_send_email("efd_invoice_requests", "request_rejected", subject, body, recipients=[item.requester_email], reference_id=item.id)
+    flash("Request rejected." + (" Notification email sent." if ok else f" Email notification failed: {err}"), "success" if ok else "warning")
+    return redirect(url_for("efd_request_detail", request_id=item.id))
+
+@app.route("/efd-requests/<int:request_id>/delete", methods=["POST"])
+def efd_request_delete(request_id):
+    if session.get("role") != "tax": abort(403)
+    item = EFDInvoiceRequest.query.get_or_404(request_id)
+    if item.status == "Deleted":
+        flash("Request is already deleted.", "info")
+        return redirect(url_for("efd_request_workplace"))
+    comment = request.form.get("comment", "").strip()
+    item.status = "Deleted"
+    item.updated_at = datetime.utcnow()
+    db.session.add(EFDRequestAudit(request_id=item.id, reference=item.reference, actor=session.get("actor_name", "Tax Compliance"), action="Soft deleted", comment=comment or "Deleted by Tax Compliance"))
+    db.session.commit()
+    flash(f"Request {item.reference} was removed from the active workplace (soft delete; audit history retained).", "success")
+    return redirect(url_for("efd_request_workplace"))
+
+@app.route("/efd-requests/<int:request_id>/amend", methods=["POST"])
+def efd_request_amend(request_id):
+    if session.get("role") != "initiator": abort(403)
+    item = EFDInvoiceRequest.query.get_or_404(request_id)
+    if item.requester_email != _initiator_email(): abort(403)
+    if item.status != "Returned for Amendment":
+        flash("Only requests returned for amendment can be edited and resubmitted.", "warning")
+        return redirect(url_for("efd_request_detail", request_id=item.id))
+    customer = request.form.get("customer_name", "").strip()
+    upload = request.files.get("invoice_file")
+    if not customer:
+        flash("Customer name is required.", "warning")
+        return redirect(url_for("efd_request_detail", request_id=item.id))
+    replacement_data = None
+    replacement_name = None
+    if upload and upload.filename:
+        replacement_name = secure_filename(upload.filename)
+        ext = replacement_name.rsplit(".", 1)[-1].lower() if "." in replacement_name else ""
+        replacement_data = upload.read(EFD_REQUEST_MAX_BYTES + 1)
+        if ext not in EFD_REQUEST_ALLOWED or len(replacement_data) > EFD_REQUEST_MAX_BYTES:
+            flash("Attach a Word document (.doc or .docx) up to 15 MB.", "danger")
+            return redirect(url_for("efd_request_detail", request_id=item.id))
+    old_status = item.status
+    item.supplier_name = customer
+    if replacement_data is not None:
+        item.original_filename = replacement_name
+        item.original_file_data = replacement_data
+    item.status = "Pending"
+    item.tax_notes = None
+    item.updated_at = datetime.utcnow()
+    db.session.add(EFDRequestAudit(request_id=item.id, reference=item.reference, actor=_initiator_email(), action="Amended and resubmitted", comment=f"Prior status: {old_status}; attachment replaced: {'yes' if replacement_data is not None else 'no'}"))
+    db.session.commit()
+    subject = f"EFD request resubmitted: {item.reference}"
+    body = f"An amended EFD invoice request has been resubmitted for review.\n\nRequest: {item.reference}\nCustomer: {item.supplier_name}\nInitiator: {item.requester_email}\n\nPlease log in to CETTP Tax Compliance Workplace to review."
+    ok, err = _central_send_email("efd_invoice_requests", "request_resubmitted", subject, body, recipients=["faugusti@britam.co.tz"], reference_id=item.id)
+    flash("Request amended and resubmitted." + (" Tax Compliance was notified." if ok else f" Notification email failed: {err}"), "success" if ok else "warning")
+    return redirect(url_for("efd_request_my"))
 
 @app.route("/efd-requests/<int:request_id>/original")
 def efd_request_original(request_id):
@@ -2252,8 +2361,7 @@ def efd_request_process(request_id):
     item.verification_code=code; item.receipt_time=receipt; item.processed_filename=fname; item.processed_file_data=data
     item.status="Completed"; item.updated_at=datetime.utcnow(); db.session.commit()
     subject=f"Your EFD invoice request has been processed: {item.reference}"
-    optional_details = (f"\nVerification code: {code}" if code else "") + (f"\nReceipt time: {receipt}" if receipt else "")
-    body=f"Your EFD invoice request has been processed and is ready for download in CETTP.\n\nRequest: {item.reference}\nCustomer: {item.supplier_name}{optional_details}\n\nLog in to the Initiator Portal and open your request to download the processed invoice."
+    body=f"Your EFD invoice request has been processed and is ready for download in CETTP.\n\nRequest: {item.reference}\nSupplier: {item.supplier_name}" + (f"\nVerification code: {code}" if code else "") + (f"\nReceipt time: {receipt}" if receipt else "") + "\n\nLog in to the Initiator Portal and open your request to download the processed invoice."
     email_ok, email_error = _central_send_email("efd_invoice_requests", "request_processed", subject, body,
         recipients=[item.requester_email], reference_id=item.id)
     if email_ok:
@@ -3149,25 +3257,6 @@ def tax_vat_control_upload():
         logger.exception("VAT ledger workbook import failed")
         flash(f"VAT ledger import failed: {str(exc)[:350]}", "danger")
         return redirect(url_for("tax_vat_control"))
-
-
-@app.route("/tax-vat-control/upload/<int:upload_id>/delete", methods=["POST"])
-def tax_vat_control_delete_upload(upload_id):
-    if not _tax_required():
-        return redirect(url_for("home"))
-    upload = VatLedgerUpload.query.get_or_404(upload_id)
-    # Explicitly remove only rows belonging to this imported workbook; VAT returns and manual movements are retained.
-    entry_count = VatLedgerEntry.query.filter_by(upload_id=upload.id).count()
-    balance_count = VatLedgerPeriodBalance.query.filter_by(upload_id=upload.id).count()
-    filename = upload.filename
-    db.session.add(VatAuditLog(actor=_vat_actor_name(), action="VAT ERP upload deleted", record_type="upload", record_id=upload.id,
-        details=f"Deleted upload {filename}; {entry_count} transaction rows and {balance_count} monthly balances removed."))
-    VatLedgerEntry.query.filter_by(upload_id=upload.id).delete(synchronize_session=False)
-    VatLedgerPeriodBalance.query.filter_by(upload_id=upload.id).delete(synchronize_session=False)
-    db.session.delete(upload)
-    db.session.commit()
-    flash(f"VAT ERP import batch #{upload_id} ({filename}) deleted, including its imported ledger rows and monthly balances. Manual movements and TRA return records were preserved.", "success")
-    return redirect(url_for("tax_vat_control"))
 
 
 @app.route("/tax-vat-control/entry/<int:entry_id>/classify", methods=["POST"])
