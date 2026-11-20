@@ -31,6 +31,13 @@ MAX_CONTENT_LENGTH = 15 * 1024 * 1024  # 15 MB
 
 efd_bp = Blueprint("efd_portal", __name__, template_folder=str(TEMPLATE_DIR))
 
+@efd_bp.before_request
+def require_cettp_login_for_efd_portal():
+    if request.endpoint == "efd_portal.britam_logo":
+        return None
+    if not session.get("role"):
+        return redirect(url_for("login", next=request.path))
+
 
 def get_db():
     conn = sqlite3.connect(DATABASE)

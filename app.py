@@ -9,8 +9,9 @@ from flask_wtf.csrf import CSRFProtect
 from wtforms import StringField, SelectField, DateField, DecimalField, TextAreaField, SubmitField
 from wtforms.validators import DataRequired, Optional, Length, NumberRange
 from flask_migrate import Migrate
-from sqlalchemy import or_, func, delete, inspect, text
+from sqlalchemy import or_, func, delete, inspect, text, Boolean
 from werkzeug.utils import secure_filename
+from werkzeug.security import generate_password_hash, check_password_hash
 from io import BytesIO
 import csv, io, smtplib, ssl, logging, hashlib, hmac
 from email.message import EmailMessage
@@ -43,6 +44,19 @@ ATTACHMENT_CATEGORIES = [
 db = SQLAlchemy(app)
 csrf = CSRFProtect(app)
 migrate = Migrate(app, db)
+
+class CETTPUser(db.Model):
+    __tablename__ = "cettp_users"
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(254), unique=True, nullable=False, index=True)
+    full_name = db.Column(db.String(160), nullable=False)
+    role = db.Column(db.String(20), nullable=False, default="initiator")
+    password_hash = db.Column(db.String(255), nullable=False)
+    active = db.Column(db.Boolean, nullable=False, default=True)
+    must_change_password = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    created_by = db.Column(db.String(254))
+
 
 # Integrated EFD-to-Invoice utility, available from the portal selection screen.
 from efd_portal import efd_bp
@@ -847,7 +861,7 @@ def tax_email_test():
 
 @app.route("/notifications")
 def notifications():
-    if session.get("role") != "tax":
+    if session.get("role") not in ("tax", "admin"):
         return redirect(url_for("home"))
     actor = _tax_actor_name()
     rows = InAppNotification.query.order_by(InAppNotification.created_at.desc()).limit(250).all()
@@ -857,7 +871,7 @@ def notifications():
 
 @app.route("/notifications/<int:notification_id>/read", methods=["POST"])
 def mark_notification_read(notification_id):
-    if session.get("role") != "tax":
+    if session.get("role") not in ("tax", "admin"):
         return redirect(url_for("home"))
     notification = InAppNotification.query.get_or_404(notification_id)
     actor = _tax_actor_name()
@@ -870,7 +884,7 @@ def mark_notification_read(notification_id):
 
 @app.route("/notifications/read-all", methods=["POST"])
 def mark_all_notifications_read():
-    if session.get("role") != "tax":
+    if session.get("role") not in ("tax", "admin"):
         return redirect(url_for("home"))
     actor = _tax_actor_name()
     read_ids = {r.notification_id for r in InAppNotificationRead.query.filter_by(actor_name=actor).all()}
@@ -895,7 +909,7 @@ def _initiator_case_query():
 
 
 def _initiator_case_access(case):
-    if session.get("role") == "tax":
+    if session.get("role") in ("tax", "admin"):
         return True
     if session.get("role") == "initiator" and (case.initiator_name or "").strip().lower() == _initiator_email():
         return True
@@ -921,36 +935,129 @@ def home():
 
 @app.route("/enter/tax", methods=["GET", "POST"])
 def enter_tax_role():
+    return redirect(url_for("login", next=request.args.get("next", "")))
+
+@app.route("/enter/initiator", methods=["GET", "POST"])
+def enter_initiator_role():
+    return redirect(url_for("login", next=request.args.get("next", "")))
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if session.get("role"):
+        return redirect(url_for("initiator_dashboard" if session.get("role") == "initiator" else "dashboard"))
     if request.method == "POST":
-        code = request.form.get("security_code", "")
-        if code == os.environ.get("TAX_ACCESS_CODE", "4823"):
-            session["role"] = "tax"
-            session["actor_name"] = request.form.get("actor_name", "").strip() or "Tax Compliance"
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+        user = CETTPUser.query.filter(func.lower(CETTPUser.email) == email).first()
+        if user and user.active and check_password_hash(user.password_hash, password):
+            session.clear()
+            session["role"] = "initiator" if user.role == "initiator" else "tax"
+            session["is_admin"] = (user.role == "admin")
+            session["user_id"] = user.id
+            session["actor_name"] = user.full_name
+            session["initiator_email"] = user.email if user.role == "initiator" else ""
+            if user.must_change_password:
+                return redirect(url_for("change_password"))
             target = request.args.get("next", "")
             if target.startswith("/") and not target.startswith("//"):
                 return redirect(target)
-            return redirect(url_for("dashboard"))
-        flash("Access Denied", "danger")
-    return render_template("tax_access.html")
+            return redirect(url_for("initiator_dashboard" if user.role == "initiator" else "dashboard"))
+        flash("Invalid email or password, or account is inactive.", "danger")
+    return render_template("login.html")
 
+@app.route("/change-password", methods=["GET", "POST"])
+def change_password():
+    user_id = session.get("user_id")
+    if not user_id:
+        return redirect(url_for("login"))
+    user = CETTPUser.query.get(user_id)
+    if not user:
+        session.clear(); return redirect(url_for("login"))
+    if request.method == "POST":
+        new_password = request.form.get("new_password", "")
+        confirm = request.form.get("confirm_password", "")
+        if len(new_password) < 12:
+            flash("Password must be at least 12 characters.", "danger")
+        elif new_password != confirm:
+            flash("Passwords do not match.", "danger")
+        else:
+            user.password_hash = generate_password_hash(new_password)
+            user.must_change_password = False
+            db.session.commit()
+            flash("Password updated successfully.", "success")
+            return redirect(url_for("initiator_dashboard" if user.role == "initiator" else "dashboard"))
+    return render_template("change_password.html")
 
-@app.route("/enter/initiator", methods=["GET", "POST"])
-@csrf.exempt
-def enter_initiator_role():
-    # Pilot mode: email is the username only; no OTP, password or verification code.
-    # CSRF is exempted only for this email-only entry endpoint.
+def _admin_required():
+    if not session.get("is_admin"):
+        abort(403)
+
+@app.route("/admin/users", methods=["GET", "POST"])
+def admin_users():
+    _admin_required()
     if request.method == "POST":
         email = request.form.get("email", "").strip().lower()
-        import re
-        if not email or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
-            flash("Enter a valid email address to continue.", "danger")
-            return render_template("initiator_access.html")
-        session.clear()
-        session["role"] = "initiator"
-        session["actor_name"] = email
-        session["initiator_email"] = email
-        return redirect(url_for("initiator_dashboard"))
-    return render_template("initiator_access.html")
+        name = request.form.get("full_name", "").strip()
+        role = request.form.get("role", "initiator")
+        password = request.form.get("password", "")
+        if role not in ("initiator", "tax", "admin"):
+            flash("Invalid role selected.", "danger")
+        elif not email or "@" not in email or not name or len(password) < 12:
+            flash("Enter a valid work email, name and password of at least 12 characters.", "danger")
+        elif CETTPUser.query.filter(func.lower(CETTPUser.email) == email).first():
+            flash("A user with that email already exists.", "danger")
+        else:
+            new_user = CETTPUser(email=email, full_name=name, role=role, password_hash=generate_password_hash(password), active=True, must_change_password=True, created_by=session.get("actor_name"))
+            db.session.add(new_user); db.session.commit()
+            flash("User created. They must change the temporary password at first login.", "success")
+            return redirect(url_for("admin_users"))
+    users = CETTPUser.query.order_by(CETTPUser.role, CETTPUser.full_name).all()
+    return render_template("admin_users.html", users=users)
+
+@app.route("/admin/users/<int:user_id>/role", methods=["POST"])
+def admin_user_role(user_id):
+    _admin_required()
+    user = CETTPUser.query.get_or_404(user_id)
+    new_role = request.form.get("role", "")
+    if new_role not in ("initiator", "tax", "admin"):
+        flash("Invalid role selected.", "danger")
+    elif user.id == session.get("user_id") and user.role == "admin" and new_role != "admin":
+        flash("You cannot remove your own administrator role while signed in.", "warning")
+    elif user.role == "admin" and new_role != "admin" and user.active and CETTPUser.query.filter_by(role="admin", active=True).count() <= 1:
+        flash("Cannot demote the last active administrator.", "warning")
+    else:
+        user.role = new_role
+        db.session.commit()
+        flash("User role updated.", "success")
+    return redirect(url_for("admin_users"))
+
+@app.route("/admin/users/<int:user_id>/toggle", methods=["POST"])
+def admin_user_toggle(user_id):
+    _admin_required()
+    user = CETTPUser.query.get_or_404(user_id)
+    if user.id == session.get("user_id"):
+        flash("You cannot deactivate your own account while signed in.", "warning")
+    elif user.role == "admin" and user.active and CETTPUser.query.filter_by(role="admin", active=True).count() <= 1:
+        flash("Cannot deactivate the last active administrator.", "warning")
+    else:
+        user.active = not user.active
+        db.session.commit()
+        flash("User access status updated.", "success")
+    return redirect(url_for("admin_users"))
+
+@app.route("/admin/users/<int:user_id>/reset-password", methods=["POST"])
+def admin_user_reset_password(user_id):
+    _admin_required()
+    user = CETTPUser.query.get_or_404(user_id)
+    password = request.form.get("password", "")
+    if len(password) < 12:
+        flash("Temporary password must be at least 12 characters.", "danger")
+    else:
+        user.password_hash = generate_password_hash(password)
+        user.must_change_password = True
+        db.session.commit()
+        flash("Password reset. User must change it on next login.", "success")
+    return redirect(url_for("admin_users"))
 
 @app.route("/logout")
 def logout():
@@ -959,7 +1066,7 @@ def logout():
 
 @app.route("/dashboard")
 def dashboard():
-    if session.get("role") != "tax":
+    if session.get("role") not in ("tax", "admin"):
         return redirect(url_for("home"))
     total = Case.query.count()
     open_cases = Case.query.filter(Case.workflow_status != "Closed").count()
@@ -1022,7 +1129,7 @@ def initiator_notification_read(notification_id):
 
 @app.route("/cases")
 def cases():
-    if session.get("role") not in ("tax", "initiator"):
+    if session.get("role") not in ("tax", "admin", "initiator"):
         return redirect(url_for("home"))
     q = request.args.get("q", "").strip()
     status = request.args.get("status", "")
@@ -1067,7 +1174,7 @@ def delete_case(case_id):
 
 @app.route("/cases/export.xlsx")
 def cases_export():
-    if session.get("role") not in ("tax", "initiator"):
+    if session.get("role") not in ("tax", "admin", "initiator"):
         return redirect(url_for("home"))
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment
@@ -1133,7 +1240,7 @@ def attachment_too_large(_error):
 
 @app.route("/cases/<int:case_id>/attachments/upload", methods=["POST"])
 def upload_case_attachments(case_id):
-    if session.get("role") not in ("initiator", "tax"):
+    if session.get("role") not in ("initiator", "tax", "admin"):
         return redirect(url_for("home"))
     case = Case.query.get_or_404(case_id)
     _initiator_case_access(case)
@@ -1160,7 +1267,7 @@ def upload_case_attachments(case_id):
 
 @app.route("/cases/<int:case_id>/attachments/<int:attachment_id>/download")
 def download_case_attachment(case_id, attachment_id):
-    if session.get("role") not in ("initiator", "tax"):
+    if session.get("role") not in ("initiator", "tax", "admin"):
         return redirect(url_for("home"))
     case = Case.query.get_or_404(case_id)
     _initiator_case_access(case)
@@ -1185,7 +1292,7 @@ def delete_case_attachment(case_id, attachment_id):
 
 @app.route("/cases/new", methods=["GET", "POST"])
 def new_case():
-    if session.get("role") not in ("initiator", "tax"):
+    if session.get("role") not in ("initiator", "tax", "admin"):
         return redirect(url_for("home"))
     form = CaseForm()
     # Initiators do not submit the Initiator name field. Remove only the
@@ -1268,7 +1375,7 @@ def new_case():
 
 @app.route("/cases/<int:case_id>/edit", methods=["GET", "POST"])
 def edit_case(case_id):
-    if session.get("role") not in ("tax", "initiator"):
+    if session.get("role") not in ("tax", "admin", "initiator"):
         return redirect(url_for("home"))
     case = Case.query.get_or_404(case_id)
     _initiator_case_access(case)
@@ -1289,7 +1396,7 @@ def edit_case(case_id):
                 if isinstance(value, str):
                     value = value.strip() or None
                 setattr(case, name, value)
-            if role == "tax":
+            if role in ("tax", "admin"):
                 case.initiator_name = (form.initiator_name.data or case.initiator_name).strip()
             else:
                 case.initiator_name = _initiator_email()
@@ -1310,7 +1417,7 @@ def edit_case(case_id):
                 _notify_initiator(case, f"tax-amendment:{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}",
                     "Tax Compliance amended your request", f"Tax Compliance updated details on case {case.reference}. Open the case to review the changes.")
             db.session.commit()
-            flash("Case details updated successfully." if role == "tax" else "Your changes have been saved and the request resubmitted to Tax Compliance.", "success")
+            flash("Case details updated successfully." if role in ("tax", "admin") else "Your changes have been saved and the request resubmitted to Tax Compliance.", "success")
             return redirect(url_for("case_detail", case_id=case.id))
         except Exception:
             db.session.rollback()
@@ -1323,7 +1430,7 @@ def edit_case(case_id):
 
 @app.route("/cases/<int:case_id>")
 def case_detail(case_id):
-    if session.get("role") not in ("tax", "initiator"):
+    if session.get("role") not in ("tax", "admin", "initiator"):
         return redirect(url_for("home"))
     case = Case.query.get_or_404(case_id)
     _initiator_case_access(case)
@@ -1331,7 +1438,7 @@ def case_detail(case_id):
 
 @app.route("/cases/<int:case_id>/tax-update", methods=["GET", "POST"])
 def tax_update(case_id):
-    if session.get("role") != "tax":
+    if session.get("role") not in ("tax", "admin"):
         flash("Tax Compliance access is required.", "danger")
         return redirect(url_for("home"))
     case = Case.query.get_or_404(case_id)
@@ -1364,7 +1471,7 @@ def tax_update(case_id):
 
 @app.route("/cases/<int:case_id>/history")
 def case_history(case_id):
-    if session.get("role") != "tax":
+    if session.get("role") not in ("tax", "admin"):
         return redirect(url_for("home"))
     case = Case.query.get_or_404(case_id)
     return render_template("history.html", case=case)
@@ -1373,7 +1480,7 @@ def case_history(case_id):
 RECON_COLUMNS = ["period", "source", "reference", "counterparty", "category", "book_amount", "tra_amount", "notes"]
 
 def _tax_required():
-    if session.get("role") != "tax":
+    if session.get("role") not in ("tax", "admin"):
         flash("Tax Compliance access is required.", "danger")
         return False
     return True
@@ -2213,13 +2320,13 @@ def efd_request_my():
 
 @app.route("/efd-requests/workplace")
 def efd_request_workplace():
-    if session.get("role") != "tax": return redirect(url_for("home"))
+    if session.get("role") not in ("tax", "admin"): return redirect(url_for("home"))
     rows=EFDInvoiceRequest.query.filter(EFDInvoiceRequest.status != "Deleted").order_by(EFDInvoiceRequest.created_at.desc()).all()
     return render_template("efd_request_workplace.html", requests=rows)
 
 @app.route("/efd-requests/<int:request_id>")
 def efd_request_detail(request_id):
-    if session.get("role") not in ("tax", "initiator"): return redirect(url_for("home"))
+    if session.get("role") not in ("tax", "admin", "initiator"): return redirect(url_for("home"))
     item=EFDInvoiceRequest.query.get_or_404(request_id)
     if session.get("role") == "initiator" and item.requester_email != _initiator_email(): abort(403)
     preview=[]
@@ -2236,7 +2343,7 @@ def efd_request_detail(request_id):
 
 @app.route("/efd-requests/<int:request_id>/return", methods=["POST"])
 def efd_request_return(request_id):
-    if session.get("role") != "tax": abort(403)
+    if session.get("role") not in ("tax", "admin"): abort(403)
     item = EFDInvoiceRequest.query.get_or_404(request_id)
     if item.status in ("Completed", "Rejected", "Deleted"):
         flash("This request cannot be returned in its current status.", "warning")
@@ -2258,7 +2365,7 @@ def efd_request_return(request_id):
 
 @app.route("/efd-requests/<int:request_id>/reject", methods=["POST"])
 def efd_request_reject(request_id):
-    if session.get("role") != "tax": abort(403)
+    if session.get("role") not in ("tax", "admin"): abort(403)
     item = EFDInvoiceRequest.query.get_or_404(request_id)
     if item.status in ("Completed", "Rejected", "Deleted"):
         flash("This request cannot be rejected in its current status.", "warning")
@@ -2280,17 +2387,21 @@ def efd_request_reject(request_id):
 
 @app.route("/efd-requests/<int:request_id>/delete", methods=["POST"])
 def efd_request_delete(request_id):
-    if session.get("role") != "tax": abort(403)
+    # Tax Compliance-only permanent purge. Delete request-specific EFD audit and
+    # central email log rows, then delete the request (including embedded files).
+    if session.get("role") not in ("tax", "admin"): abort(403)
     item = EFDInvoiceRequest.query.get_or_404(request_id)
-    if item.status == "Deleted":
-        flash("Request is already deleted.", "info")
-        return redirect(url_for("efd_request_workplace"))
-    comment = request.form.get("comment", "").strip()
-    item.status = "Deleted"
-    item.updated_at = datetime.utcnow()
-    db.session.add(EFDRequestAudit(request_id=item.id, reference=item.reference, actor=session.get("actor_name", "Tax Compliance"), action="Soft deleted", comment=comment or "Deleted by Tax Compliance"))
-    db.session.commit()
-    flash(f"Request {item.reference} was removed from the active workplace (soft delete; audit history retained).", "success")
+    request_ref = item.reference
+    request_pk = item.id
+    try:
+        EFDRequestAudit.query.filter_by(request_id=request_pk).delete(synchronize_session=False)
+        PortalEmailLog.query.filter_by(module="efd_invoice_requests", reference_id=request_pk).delete(synchronize_session=False)
+        db.session.delete(item)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        raise
+    flash(f"Request {request_ref} and its EFD portal records were permanently deleted.", "success")
     return redirect(url_for("efd_request_workplace"))
 
 @app.route("/efd-requests/<int:request_id>/amend", methods=["POST"])
@@ -2333,14 +2444,14 @@ def efd_request_amend(request_id):
 
 @app.route("/efd-requests/<int:request_id>/original")
 def efd_request_original(request_id):
-    if session.get("role") not in ("tax", "initiator"): abort(403)
+    if session.get("role") not in ("tax", "admin", "initiator"): abort(403)
     item=EFDInvoiceRequest.query.get_or_404(request_id)
     if session.get("role") == "initiator" and item.requester_email != _initiator_email(): abort(403)
     return send_file(BytesIO(item.original_file_data), download_name=item.original_filename, as_attachment=False)
 
 @app.route("/efd-requests/<int:request_id>/processed")
 def efd_request_processed(request_id):
-    if session.get("role") not in ("tax", "initiator"): abort(403)
+    if session.get("role") not in ("tax", "admin", "initiator"): abort(403)
     item=EFDInvoiceRequest.query.get_or_404(request_id)
     if session.get("role") == "initiator" and item.requester_email != _initiator_email(): abort(403)
     if not item.processed_file_data: abort(404)
@@ -2348,7 +2459,7 @@ def efd_request_processed(request_id):
 
 @app.route("/efd-requests/<int:request_id>/process", methods=["POST"])
 def efd_request_process(request_id):
-    if session.get("role") != "tax": abort(403)
+    if session.get("role") not in ("tax", "admin"): abort(403)
     item=EFDInvoiceRequest.query.get_or_404(request_id)
     code=request.form.get("verification_code", "").strip() or None; receipt=request.form.get("receipt_time", "").strip() or None
     processed=request.files.get("processed_file")
@@ -2372,7 +2483,7 @@ def efd_request_process(request_id):
 
 @app.route("/efd-requests/<int:request_id>/retry-email", methods=["POST"])
 def efd_request_retry_email(request_id):
-    if session.get("role") != "tax":
+    if session.get("role") not in ("tax", "admin"):
         abort(403)
     item = EFDInvoiceRequest.query.get_or_404(request_id)
     if item.processed_file_data:
@@ -2457,7 +2568,7 @@ def _ensure_recurring_tax_deadlines():
 
 
 def _tax_calendar_required():
-    if session.get("role") != "tax":
+    if session.get("role") not in ("tax", "admin"):
         return False
     return True
 
@@ -3468,12 +3579,12 @@ def tax_vat_control_export():
 
 @app.route("/health")
 def health():
-    return jsonify(status="ok", application="CETTP Tax Compliance & Cancellation Tracking Portal", version="3.3.2-email-logs-auto-migration")
+    return jsonify(status="ok", application="CETTP Tax Compliance & Cancellation Tracking Portal", version="3.6.2-admin-managed-access")
 
 @app.context_processor
 def inject_globals():
     unread_notification_count = 0
-    if session.get("role") == "tax":
+    if session.get("role") in ("tax", "admin"):
         try:
             actor = _tax_actor_name()
             read_ids = db.session.query(InAppNotificationRead.notification_id).filter_by(actor_name=actor)
@@ -3566,6 +3677,18 @@ def _run_safe_startup_migrations():
 
 with app.app_context():
     db.create_all()
+    # Bootstrap initial administrator from Render environment variables; never overwrite an existing account.
+    bootstrap_email = os.environ.get("CETTP_ADMIN_EMAIL", "").strip().lower()
+    bootstrap_password = os.environ.get("CETTP_ADMIN_PASSWORD", "")
+    bootstrap_name = os.environ.get("CETTP_ADMIN_NAME", "CETTP Administrator").strip() or "CETTP Administrator"
+    if bootstrap_email and len(bootstrap_password) >= 12 and not CETTPUser.query.filter(func.lower(CETTPUser.email) == bootstrap_email).first():
+        db.session.add(CETTPUser(email=bootstrap_email, full_name=bootstrap_name, role="admin",
+            password_hash=generate_password_hash(bootstrap_password), active=True, must_change_password=True, created_by="environment bootstrap"))
+        db.session.commit()
+    elif bootstrap_email and bootstrap_password and len(bootstrap_password) < 12:
+        logger.warning("Initial Admin bootstrap skipped: CETTP_ADMIN_PASSWORD must be at least 12 characters")
+    elif bool(bootstrap_email) != bool(bootstrap_password):
+        logger.warning("Initial Admin bootstrap skipped: CETTP_ADMIN_EMAIL and CETTP_ADMIN_PASSWORD must both be set")
     # Additive schema updates for the WHT TIN Matching enhancements.
     try:
         inspector=inspect(db.engine)

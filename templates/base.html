@@ -16,7 +16,7 @@
   <div class="topbar-context"><span class="context-kicker">CORPORATE WORKSPACE</span><strong>{% if current_role == 'tax' %}Tax Compliance{% elif current_role == 'initiator' %}Initiator Workspace{% else %}Tax &amp; Compliance Portal{% endif %}</strong></div>
   <div class="topbar-actions">
    {% if current_role == 'tax' %}<a class="top-icon-link" href="{{ url_for('notifications') }}" aria-label="Notifications"><i class="bi bi-bell"></i>{% if unread_notification_count %}<span class="notification-count">{{ unread_notification_count if unread_notification_count < 100 else '99+' }}</span>{% endif %}</a>{% endif %}
-   {% if current_role %}<div class="user-chip"><span class="user-avatar">{{ 'TC' if current_role == 'tax' else 'IN' }}</span><span class="user-chip-copy"><strong>{{ session.get('actor_name', 'CETTP User') }}</strong><small>{{ 'Tax Compliance' if current_role == 'tax' else 'Initiator' }}</small></span></div><a class="btn btn-outline-light btn-sm logout-btn" href="{{ url_for('logout') }}"><i class="bi bi-box-arrow-right"></i><span>Sign out</span></a>{% else %}<span class="secure-label"><i class="bi bi-shield-lock"></i> Internal access</span>{% endif %}
+   {% if current_role %}<div class="user-chip"><span class="user-avatar">{{ 'TC' if current_role == 'tax' else 'IN' }}</span><span class="user-chip-copy"><strong>{{ session.get('actor_name', 'CETTP User') }}</strong><small>{{ 'Administrator' if session.get('is_admin') else ('Tax Compliance' if current_role == 'tax' else 'Initiator') }}</small></span></div><a class="btn btn-outline-light btn-sm logout-btn" href="{{ url_for('logout') }}"><i class="bi bi-box-arrow-right"></i><span>Sign out</span></a>{% else %}<span class="secure-label"><i class="bi bi-shield-lock"></i> Internal access</span>{% endif %}
   </div>
  </div>
 </header>
@@ -25,6 +25,7 @@
  <aside class="sidebar" aria-label="Primary navigation">
   <div class="sidebar-scroll">
    <div class="sidebar-section">WORKSPACE</div>
+   {% if session.get('is_admin') %}<a class="side-link {{ 'active' if request.endpoint == 'admin_users' else '' }}" href="{{ url_for('admin_users') }}"><i class="bi bi-people"></i><span>User Management</span></a>{% endif %}
    <a class="side-link {{ 'active' if request.endpoint in ['dashboard','initiator_dashboard'] else '' }}" href="{{ url_for('dashboard') if current_role == 'tax' else url_for('initiator_dashboard') }}"><i class="bi bi-grid-1x2"></i><span>Overview</span></a>
    <a class="side-link {{ 'active' if request.endpoint in ['new_case','cases','case_detail'] else '' }}" href="{{ url_for('cases') if current_role == 'initiator' else url_for('new_case') }}"><i class="bi bi-folder2-open"></i><span>{{ 'My Requests' if current_role == 'initiator' else 'New Case' }}</span></a>
    {% if current_role == 'initiator' %}
