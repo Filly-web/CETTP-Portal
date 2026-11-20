@@ -24,7 +24,7 @@
       <a href="/efd-invoice/history"><span class="nav-icon">◷</span>Processing history</a>
       <a href="/efd-invoice/batch"><span class="nav-icon">▦</span>Batch invoice processing</a>
     </nav></div>
-    <div class="sidebar-note"><strong>Compliance, made simpler.</strong>Prepare invoices with TRA verification details and a scannable QR code. Always check the details against the original TRA receipt.</div>
+    <div class="sidebar-note"><strong>Compliance, made simpler.</strong>Prepare invoices with TRA verification details and a QR code.</div>
   </aside>
   <div class="main">
     <header class="topbar"><div><div class="crumb">Workspace / Dashboard</div><div class="top-title">EFD Invoice Workspace</div></div><div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap"><a href="/" class="btn btn-secondary" style="padding:9px 13px">← Back to CETTP Portal</a><div class="user"><div class="avatar">TC</div><div><div class="user-name">Tax Compliance</div><div class="user-role">Britam Insurance (T) Ltd</div></div></div></div></header>
@@ -38,7 +38,7 @@
     {% endif %}
 
       {% with messages = get_flashed_messages(with_categories=true) %}{% for category, message in messages %}<div class="flash {{ category }}" role="alert">{{ message }}</div>{% endfor %}{% endwith %}
-      <section class="welcome"><div><div class="eyebrow">Welcome back</div><h1>Welcome to Britam EFD Portal</h1><p>Prepare your invoice documents with TRA verification details and a QR code in a few simple steps.</p></div><div class="welcome-badge"><span class="shield">✓</span>Accurate details.<br>Clear verification.</div></section>
+      <section class="welcome"><div><div class="eyebrow">Welcome back</div><h1>Welcome to Britam EFD Portal</h1><p>Process Word invoices and add TRA verification details.</p></div><div class="welcome-badge"><span class="shield">✓</span>Invoice processing</div></section>
       <section class="stats" aria-label="Portal statistics">
         <div class="stat-card"><div class="stat-icon">▤</div><div><div class="stat-number">{{ total }}</div><div class="stat-label">Invoices processed</div></div></div>
         <div class="stat-card"><div class="stat-icon green">✓</div><div><div class="stat-number">{{ today }}</div><div class="stat-label">Processed today</div></div></div>
@@ -46,7 +46,7 @@
       </section>
       <div class="layout">
         <section class="panel" id="upload">
-          <div class="panel-head"><div><h2>Process an invoice</h2><p class="panel-intro">Add the TRA receipt details to your Word invoice.</p></div><span class="pill">DOCX files</span></div>
+          <div class="panel-head"><div><h2>Process an invoice</h2><p class="panel-intro">Upload a Word invoice and enter the receipt details.</p></div><span class="pill">DOCX files</span></div>
           <form action="/efd-invoice/process" method="post" enctype="multipart/form-data" id="invoice-form">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="field"><label for="invoice">Invoice document</label><input id="invoice" name="invoice" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" required><small>Choose a Microsoft Word invoice (.docx), maximum file size 15 MB.</small></div>
@@ -56,7 +56,7 @@
           </form>
         </section>
         <aside class="side-stack">
-          <section class="panel guide"><div class="guide-icon">✓</div><h2>Before you process</h2><p>A quick check helps ensure the generated document is ready for review.</p><ul><li>Confirm the verification code from the TRA receipt.</li><li>Enter the receipt time accurately.</li><li>Open the downloaded document and review the QR code.</li></ul></section>
+          <section class="panel guide"><div class="guide-icon">✓</div><h2>Before you process</h2><p>Check these details before processing.</p><ul><li>Confirm the verification code from the TRA receipt.</li><li>Enter the receipt time accurately.</li><li>Open the downloaded document and review the QR code.</li></ul></section>
           <section class="panel"><h2>Quick links</h2><a class="help-link" href="/efd-invoice/batch"><span>Open batch invoice processing</span><span>→</span></a>
           <a class="help-link" href="/efd-invoice/history"><span>View processing history</span><span>→</span></a><a class="help-link" href="#upload"><span>Process another invoice</span><span>→</span></a><a class="help-link" href="https://verify.tra.go.tz/" target="_blank" rel="noopener"><span>TRA verification website</span><span>↗</span></a></section>
         </aside>
