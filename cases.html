@@ -1,3 +1,69 @@
-<div class="table-responsive"><table class="table align-middle cettp-table datatable"><thead><tr><th>Reference</th><th>Type</th><th>Policy / Customer</th><th>Effective date</th><th>Workflow</th><th>TRA status</th><th></th></tr></thead><tbody>
-{% for c in (records if records is defined else recent) %}<tr><td><a class="fw-semibold text-nowrap" href="{{ url_for('case_detail', case_id=c.id) }}">{{ c.reference }}</a><div class="small text-muted">{{ c.created_at.strftime('%d %b %Y') }}</div></td><td><span class="type-pill {{ 'cancel' if c.case_type == 'Cancellation' else 'endorse' }}">{{ c.case_type }}</span></td><td><div class="fw-semibold">{{ c.policy_number }}</div><div class="small text-muted">{{ c.customer_name }}</div></td><td>{{ c.effective_date.strftime('%d %b %Y') }}</td><td><span class="status-pill">{{ c.workflow_status }}</span></td><td>{{ c.tra_status }}</td><td class="text-nowrap"><a class="btn btn-sm btn-outline-secondary" href="{{ url_for('case_detail', case_id=c.id) }}">Open</a>{% if session.get('role') == 'tax' %}<form method="post" action="{{ url_for('delete_case', case_id=c.id) }}" class="d-inline" onsubmit="return confirm('Permanently delete case ' ~ c.reference ~ ' and its linked tracking record(s)? This cannot be undone.');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-outline-danger" type="submit">Delete</button></form>{% endif %}</td></tr>{% endfor %}
-</tbody></table></div>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#17324d">
+<title>{% block title %}CETTP | Britam{% endblock %}</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdn.datatables.net/2.1.8/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+<link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
+</head>
+<body class="cettp-app">
+<header class="topbar">
+ <div class="topbar-inner">
+  <a class="navbar-brand" href="{{ url_for('home') }}"><span class="brand-logo">B</span><span class="brand-wordmark">BRITAM<small>CETTP · TAX &amp; COMPLIANCE</small></span></a>
+  <div class="topbar-context"><span class="context-kicker">CORPORATE WORKSPACE</span><strong>{% if current_role == 'tax' %}Tax Compliance{% elif current_role == 'initiator' %}Initiator Workspace{% else %}Tax &amp; Compliance Portal{% endif %}</strong></div>
+  <div class="topbar-actions">
+   {% if current_role == 'tax' %}<a class="top-icon-link" href="{{ url_for('notifications') }}" aria-label="Notifications"><i class="bi bi-bell"></i>{% if unread_notification_count %}<span class="notification-count">{{ unread_notification_count if unread_notification_count < 100 else '99+' }}</span>{% endif %}</a>{% endif %}
+   {% if current_role %}<div class="user-chip"><span class="user-avatar">{{ 'TC' if current_role == 'tax' else 'IN' }}</span><span class="user-chip-copy"><strong>{{ session.get('actor_name', 'CETTP User') }}</strong><small>{{ 'Administrator' if session.get('is_admin') else ('Tax Compliance' if current_role == 'tax' else 'Initiator') }}</small></span></div><a class="btn btn-outline-light btn-sm logout-btn" href="{{ url_for('logout') }}"><i class="bi bi-box-arrow-right"></i><span>Sign out</span></a>{% else %}<span class="secure-label"><i class="bi bi-shield-lock"></i> Internal access</span>{% endif %}
+  </div>
+ </div>
+</header>
+<div class="app-shell {% if not current_role %}public-shell{% endif %}">
+ {% if current_role %}
+ <aside class="sidebar" aria-label="Primary navigation">
+  <div class="sidebar-scroll">
+   <div class="sidebar-section">WORKSPACE</div>
+   {% if session.get('is_admin') %}<a class="side-link {{ 'active' if request.endpoint == 'admin_users' else '' }}" href="{{ url_for('admin_users') }}"><i class="bi bi-people"></i><span>User Management</span></a>{% endif %}
+   <a class="side-link {{ 'active' if request.endpoint in ['dashboard','initiator_dashboard'] else '' }}" href="{{ url_for('dashboard') if current_role == 'tax' else url_for('initiator_dashboard') }}"><i class="bi bi-grid-1x2"></i><span>Overview</span></a>
+   <a class="side-link {{ 'active' if request.endpoint in ['new_case','cases','case_detail'] else '' }}" href="{{ url_for('cases') if current_role == 'initiator' else url_for('new_case') }}"><i class="bi bi-folder2-open"></i><span>{{ 'My Requests' if current_role == 'initiator' else 'New Case' }}</span></a>
+   {% if current_role == 'initiator' %}
+   <div class="sidebar-section">MY WORK</div>
+   <a class="side-link {{ 'active' if request.endpoint == 'efd_request_new' else '' }}" href="{{ url_for('efd_request_new') }}"><i class="bi bi-file-earmark-plus"></i><span>New EFD Request</span></a>
+   <a class="side-link {{ 'active' if request.endpoint == 'efd_request_my' else '' }}" href="{{ url_for('efd_request_my') }}"><i class="bi bi-receipt"></i><span>My EFD Requests</span></a>
+   {% else %}
+   <div class="sidebar-section">CASE MANAGEMENT</div>
+   <a class="side-link {{ 'active' if request.endpoint in ['cases','case_detail','tax_update','case_history'] else '' }}" href="{{ url_for('cases') }}"><i class="bi bi-clipboard-check"></i><span>Case Register</span></a>
+   <a class="side-link {{ 'active' if request.endpoint == 'efd_request_workplace' else '' }}" href="{{ url_for('efd_request_workplace') }}"><i class="bi bi-file-earmark-text"></i><span>EFD Requests</span></a>
+   <a class="side-link {{ 'active' if request.endpoint == 'notifications' else '' }}" href="{{ url_for('notifications') }}"><i class="bi bi-bell"></i><span>Notifications</span>{% if unread_notification_count %}<span class="side-count">{{ unread_notification_count }}</span>{% endif %}</a>
+   <div class="sidebar-section">TAX &amp; RECONCILIATION</div>
+   <a class="side-link {{ 'active' if request.endpoint == 'tax_calendar' else '' }}" href="{{ url_for('tax_calendar') }}"><i class="bi bi-calendar3"></i><span>Compliance Calendar</span></a>
+   <a class="side-link {{ 'active' if request.endpoint == 'reconciliation_home' else '' }}" href="{{ url_for('reconciliation_home', type='VAT') }}"><i class="bi bi-arrow-left-right"></i><span>VAT &amp; WHT</span></a>
+   <a class="side-link {{ 'active' if request.endpoint and request.endpoint.startswith('wht_tin_') else '' }}" href="{{ url_for('wht_tin_home') }}"><i class="bi bi-person-vcard"></i><span>WHT TIN Matching</span></a>
+   <a class="side-link {{ 'active' if request.endpoint and request.endpoint.startswith('tax_vat_control') else '' }}" href="{{ url_for('tax_vat_control') }}"><i class="bi bi-journal-text"></i><span>VAT Control Account</span></a>
+   <a class="side-link {{ 'active' if request.endpoint and request.endpoint.startswith('tax_investment_wht') else '' }}" href="{{ url_for('tax_investment_wht') }}"><i class="bi bi-bank"></i><span>Investment WHT</span></a>
+   <a class="side-link {{ 'active' if request.endpoint and request.endpoint.startswith('cancellation_tracker') else '' }}" href="{{ url_for('cancellation_tracker') }}"><i class="bi bi-arrow-repeat"></i><span>Cancellation Tracker</span></a>
+   <div class="sidebar-section">ADMINISTRATION</div>
+   <a class="side-link {{ 'active' if request.endpoint and request.endpoint.startswith('tax_email') else '' }}" href="{{ url_for('tax_email_settings') }}"><i class="bi bi-envelope-gear"></i><span>Email &amp; Logs</span></a>
+   <a class="side-link" href="{{ url_for('dashboard') }}"><i class="bi bi-bar-chart-line"></i><span>Reports</span></a>
+   {% endif %}
+  </div>
+  <div class="sidebar-bottom"><div class="sidebar-brand-mark">B</div><div><strong>Britam CETTP</strong><small>Tax &amp; Compliance Platform</small></div><span class="sidebar-version">V3.6.0</span></div>
+ </aside>
+ {% endif %}
+ <main class="main-content {% if not current_role %}no-sidebar{% endif %}">
+  {% if current_role %}<div class="page-context"><span>Britam</span><i class="bi bi-chevron-right"></i><strong>{{ 'Tax Compliance' if current_role == 'tax' else 'Initiator Workspace' }}</strong><span class="context-spacer"></span><span class="system-status"><i></i> System workspace</span></div>{% endif %}
+  {% with messages = get_flashed_messages(with_categories=true) %}{% if messages %}{% for category, message in messages %}<div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">{{ message }}<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>{% endfor %}{% endif %}{% endwith %}
+  {% block content %}{% endblock %}
+  <footer class="app-footer"><span><strong>CETTP V3.6.0</strong><span class="footer-divider">·</span> Tax &amp; Compliance Portal</span><span>Internal use only · Britam Insurance (Tanzania) Limited</span></footer>
+ </main>
+</div>
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.datatables.net/2.1.8/js/dataTables.min.js"></script>
+<script src="https://cdn.datatables.net/2.1.8/js/dataTables.bootstrap5.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+{% block scripts %}{% endblock %}
+</body></html>

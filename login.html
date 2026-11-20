@@ -1,0 +1,17 @@
+{% extends "base.html" %}{% block title %}My Workspace | CETTP{% endblock %}
+{% block content %}
+<div class="workspace-heading"><div><div class="eyebrow">INITIATOR WORKSPACE</div><h1 class="page-title">Welcome back</h1><p class="text-muted mb-0">{{ current_actor }}</p></div><a href="{{ url_for('new_case') }}" class="btn btn-primary">＋ New request</a></div>
+<div class="quick-actions initiator-actions">
+  <a href="{{ url_for('efd_request_new') }}"><span class="quick-icon blue">＋</span><span><strong>Request EFD invoice</strong><small>Submit a Word invoice</small></span><b>→</b></a>
+  <a href="{{ url_for('efd_request_my') }}"><span class="quick-icon purple">▤</span><span><strong>My EFD requests</strong><small>Track invoice requests</small></span><b>→</b></a>
+  <a href="{{ url_for('new_case') }}"><span class="quick-icon green">↗</span><span><strong>New case</strong><small>Cancellation or endorsement</small></span><b>→</b></a>
+</div>
+<div class="section-heading"><div><h2>My requests</h2><p>Live status of your submissions</p></div><a class="panel-action" href="{{ url_for('cases') }}">View all →</a></div>
+<div class="row g-3 mb-4">
+{% set cards = [('All requests','all',url_for('cases'),'blue'),('Drafts','drafts',url_for('cases',status='Draft'),'muted'),('Awaiting review','awaiting',url_for('cases',status='Initiated'),'orange'),('Returned to me','returned',url_for('cases',status='Returned for Clarification'),'red'),('Completed','completed',url_for('cases',status='Closed'),'green'),('Overdue','overdue',url_for('cases',overdue='1'),'purple')] %}
+{% for title,key,link,colour in cards %}<div class="col-6 col-xl-2"><a href="{{ link }}" class="summary-tile"><span class="summary-label">{{ title }}</span><strong class="summary-number {{ colour }}">{{ counts[key] }}</strong></a></div>{% endfor %}
+</div>
+<div class="panel mb-4"><div class="panel-heading"><div><h2>Recent requests</h2><p>Your latest submissions and their current status</p></div><a class="panel-action" href="{{ url_for('cases') }}">All requests →</a></div>
+<div class="table-responsive"><table class="table align-middle cettp-table mb-0"><thead><tr><th>Reference</th><th>Type</th><th>Policy</th><th>Date</th><th>Status</th><th></th></tr></thead><tbody>{% for c in recent %}<tr><td class="fw-semibold">{{ c.reference }}</td><td>{{ c.case_type }}</td><td>{{ c.policy_number }}</td><td>{{ c.created_at.strftime('%d %b %Y') if c.created_at else '—' }}</td><td><span class="status-pill">{{ c.workflow_status }}</span></td><td><a class="btn btn-outline-primary btn-sm" href="{{ url_for('case_detail',case_id=c.id) }}">Open</a></td></tr>{% else %}<tr><td colspan="6" class="text-center text-muted py-4">No requests yet.</td></tr>{% endfor %}</tbody></table></div></div>
+<div class="compact-note"><span>i</span> Requests returned for clarification can be amended and resubmitted from their detail page.</div>
+{% endblock %}
