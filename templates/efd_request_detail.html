@@ -16,8 +16,8 @@
 <hr><h6>Return processed invoice to requester</h6>
 <form method="post" action="{{ url_for('efd_request_process',request_id=item.id) }}" enctype="multipart/form-data">
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-<div class="mb-3"><label class="form-label">EFD Verification Code *</label><input class="form-control" name="verification_code" required></div>
-<div class="mb-3"><label class="form-label">Receipt Time (HH:MM:SS) *</label><input class="form-control" name="receipt_time" placeholder="HH:MM:SS" required></div>
+<div class="mb-3"><label class="form-label">EFD Verification Code (optional)</label><input class="form-control" name="verification_code"></div>
+<div class="mb-3"><label class="form-label">Receipt Time (optional)</label><input class="form-control" name="receipt_time" placeholder="HH:MM:SS"></div>
 <div class="mb-3"><label class="form-label">Processed Invoice with EFD Barcode (Word) *</label><input class="form-control" type="file" name="processed_file" accept=".doc,.docx" required></div>
 <button class="btn btn-primary" type="submit">Submit Processed Invoice to Initiator</button></form>{% endif %}
 </div></div></div></div></div>{% endblock %}

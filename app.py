@@ -2241,10 +2241,10 @@ def efd_request_processed(request_id):
 def efd_request_process(request_id):
     if session.get("role") != "tax": abort(403)
     item=EFDInvoiceRequest.query.get_or_404(request_id)
-    code=request.form.get("verification_code", "").strip(); receipt=request.form.get("receipt_time", "").strip()
+    code=request.form.get("verification_code", "").strip() or None; receipt=request.form.get("receipt_time", "").strip() or None
     processed=request.files.get("processed_file")
-    if not code or not receipt or not processed or not processed.filename:
-        flash("Verification code, receipt time and processed invoice are all required.", "warning"); return redirect(url_for("efd_request_detail", request_id=item.id))
+    if not processed or not processed.filename:
+        flash("The processed invoice file is required.", "warning"); return redirect(url_for("efd_request_detail", request_id=item.id))
     fname=secure_filename(processed.filename); ext=fname.rsplit(".",1)[-1].lower() if "." in fname else ""
     data=processed.read(EFD_REQUEST_MAX_BYTES+1)
     if ext not in EFD_REQUEST_ALLOWED or len(data)>EFD_REQUEST_MAX_BYTES:
@@ -2252,7 +2252,8 @@ def efd_request_process(request_id):
     item.verification_code=code; item.receipt_time=receipt; item.processed_filename=fname; item.processed_file_data=data
     item.status="Completed"; item.updated_at=datetime.utcnow(); db.session.commit()
     subject=f"Your EFD invoice request has been processed: {item.reference}"
-    body=f"Your EFD invoice request has been processed and is ready for download in CETTP.\n\nRequest: {item.reference}\nSupplier: {item.supplier_name}\nVerification code: {code}\nReceipt time: {receipt}\n\nLog in to the Initiator Portal and open your request to download the processed invoice."
+    optional_details = (f"\nVerification code: {code}" if code else "") + (f"\nReceipt time: {receipt}" if receipt else "")
+    body=f"Your EFD invoice request has been processed and is ready for download in CETTP.\n\nRequest: {item.reference}\nCustomer: {item.supplier_name}{optional_details}\n\nLog in to the Initiator Portal and open your request to download the processed invoice."
     email_ok, email_error = _central_send_email("efd_invoice_requests", "request_processed", subject, body,
         recipients=[item.requester_email], reference_id=item.id)
     if email_ok:
@@ -3148,6 +3149,25 @@ def tax_vat_control_upload():
         logger.exception("VAT ledger workbook import failed")
         flash(f"VAT ledger import failed: {str(exc)[:350]}", "danger")
         return redirect(url_for("tax_vat_control"))
+
+
+@app.route("/tax-vat-control/upload/<int:upload_id>/delete", methods=["POST"])
+def tax_vat_control_delete_upload(upload_id):
+    if not _tax_required():
+        return redirect(url_for("home"))
+    upload = VatLedgerUpload.query.get_or_404(upload_id)
+    # Explicitly remove only rows belonging to this imported workbook; VAT returns and manual movements are retained.
+    entry_count = VatLedgerEntry.query.filter_by(upload_id=upload.id).count()
+    balance_count = VatLedgerPeriodBalance.query.filter_by(upload_id=upload.id).count()
+    filename = upload.filename
+    db.session.add(VatAuditLog(actor=_vat_actor_name(), action="VAT ERP upload deleted", record_type="upload", record_id=upload.id,
+        details=f"Deleted upload {filename}; {entry_count} transaction rows and {balance_count} monthly balances removed."))
+    VatLedgerEntry.query.filter_by(upload_id=upload.id).delete(synchronize_session=False)
+    VatLedgerPeriodBalance.query.filter_by(upload_id=upload.id).delete(synchronize_session=False)
+    db.session.delete(upload)
+    db.session.commit()
+    flash(f"VAT ERP import batch #{upload_id} ({filename}) deleted, including its imported ledger rows and monthly balances. Manual movements and TRA return records were preserved.", "success")
+    return redirect(url_for("tax_vat_control"))
 
 
 @app.route("/tax-vat-control/entry/<int:entry_id>/classify", methods=["POST"])
