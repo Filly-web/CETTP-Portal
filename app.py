@@ -1008,8 +1008,39 @@ def admin_users():
             flash("A user with that email already exists.", "danger")
         else:
             new_user = CETTPUser(email=email, full_name=name, role=role, password_hash=generate_password_hash(password), active=True, must_change_password=False, created_by=session.get("actor_name"))
-            db.session.add(new_user); db.session.commit()
-            flash("User account created successfully.", "success")
+            db.session.add(new_user)
+            db.session.commit()
+            portal_url = os.environ.get("CETTP_PORTAL_URL", "https://cettp-portal.onrender.com/").strip()
+            credential_label = "PIN" if role == "initiator" else "Password"
+            role_label = "Initiator" if role == "initiator" else ("Tax Compliance" if role == "tax" else "Administrator")
+            email_subject = "CETTP Portal Access – Your Login Credentials"
+            email_body = f"""Dear {name},
+
+You have been assigned access to the CETTP Tax Compliance Portal.
+
+Please use the credentials below to log in to the portal:
+
+Portal link: {portal_url}
+Login credentials:
+Email: {email}
+{credential_label}: {password}
+
+Please click the link above to access the portal using your assigned credentials. Keep your login credentials secure and do not share them with anyone.
+
+The portal is intended to facilitate our tax compliance processes, improve coordination, and make our internal workflows more efficient.
+
+Let's keep our Tax Compliance Together. Ahsante sana.
+
+Yours,
+Filbert
+Tax and Compliance Officer
+Britam Insurance (Tanzania) Limited
+"""
+            sent, email_error = _central_send_email("user_access", "account_created", email_subject, email_body, recipients=[email], reference_id=new_user.id)
+            if sent:
+                flash("User account created successfully. Access notification email sent.", "success")
+            else:
+                flash(f"User account created, but access email failed: {email_error or 'Unknown error'}. Check SMTP settings and resend by resetting the credential.", "warning")
             return redirect(url_for("admin_users"))
     users = CETTPUser.query.order_by(CETTPUser.role, CETTPUser.full_name).all()
     return render_template("admin_users.html", users=users)
@@ -1057,7 +1088,36 @@ def admin_user_reset_password(user_id):
         user.password_hash = generate_password_hash(password)
         user.must_change_password = False
         db.session.commit()
-        flash("User credential reset successfully. No first-login change is required.", "success")
+        portal_url = os.environ.get("CETTP_PORTAL_URL", "https://cettp-portal.onrender.com/").strip()
+        credential_label = "PIN" if user.role == "initiator" else "Password"
+        email_subject = "CETTP Portal Access – Your Login Credentials"
+        email_body = f"""Dear {user.full_name},
+
+You have been assigned access to the CETTP Tax Compliance Portal.
+
+Please use the credentials below to log in to the portal:
+
+Portal link: {portal_url}
+Login credentials:
+Email: {user.email}
+{credential_label}: {password}
+
+Please click the link above to access the portal using your assigned credentials. Keep your login credentials secure and do not share them with anyone.
+
+The portal is intended to facilitate our tax compliance processes, improve coordination, and make our internal workflows more efficient.
+
+Let's keep our Tax Compliance Together. Ahsante sana.
+
+Yours,
+Filbert
+Tax and Compliance Officer
+Britam Insurance (Tanzania) Limited
+"""
+        sent, email_error = _central_send_email("user_access", "credential_reset", email_subject, email_body, recipients=[user.email], reference_id=user.id)
+        if sent:
+            flash("Credential reset successfully and updated credentials emailed to the user.", "success")
+        else:
+            flash(f"Credential reset successfully, but email failed: {email_error or 'Unknown error'}.", "warning")
     return redirect(url_for("admin_users"))
 
 @app.route("/logout")
