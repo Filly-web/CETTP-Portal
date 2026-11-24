@@ -1,0 +1,7 @@
+{% extends 'base.html' %}{% block title %}Upload Manual Invoice{% endblock %}{% block content %}
+<div class="container-fluid py-3"><div class="mb-3"><h2>Upload Manual Invoice</h2><p class="text-muted">Upload an existing Britam Word tax invoice for Tax Compliance processing.</p></div>
+<form method="post" enctype="multipart/form-data" class="card shadow-sm"><div class="card-body"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<div class="mb-3"><label class="form-label">Customer / Insured Name *</label><input class="form-control" name="supplier_name" maxlength="180" required></div>
+<div class="mb-3"><label class="form-label">Purpose / Invoice Description *</label><textarea class="form-control" name="purpose" rows="3" maxlength="2000" required></textarea></div>
+<div class="mb-3"><label class="form-label">Manual Tax Invoice (Word) *</label><input class="form-control" type="file" name="invoice_file" accept=".doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" required><div class="form-text">Accepted formats: .doc and .docx. Maximum file size: 15 MB.</div></div>
+<div class="d-flex justify-content-between"><a class="btn btn-outline-secondary" href="{{ url_for('efd_request_new') }}">Back</a><button class="btn btn-primary" type="submit">Submit Manual Invoice</button></div></div></form></div>{% endblock %}

@@ -1,0 +1,19 @@
+{% extends 'base.html' %}{% block title %}New EFD Invoice Request{% endblock %}{% block content %}
+<div class="container-fluid py-3">
+  <div class="mb-4"><h2>New EFD Invoice Request</h2><p class="text-muted mb-0">Choose how you want to prepare the invoice for Tax Compliance processing.</p></div>
+  <div class="row g-3">
+    <div class="col-lg-6"><div class="card h-100 shadow-sm border-primary"><div class="card-body d-flex flex-column p-4">
+      <div class="d-flex align-items-center gap-2 mb-3"><span class="badge bg-primary">Option 1</span><span class="badge bg-light text-primary">Recommended</span></div>
+      <h4>Digital Invoice</h4><p class="text-muted">Complete the invoice details directly in CETTP. Select the VAT rate, calculate the premium automatically, preview the Word invoice and submit it for processing.</p>
+      <ul class="small text-muted"><li>Guided digital form</li><li>VAT selection: 0% or 18%</li><li>Automatic calculations and Word preview</li><li>Initiator details captured from CETTP</li></ul>
+      <div class="mt-auto"><a class="btn btn-primary" href="{{ url_for('efd_request_digital_form') }}">Create Digital Invoice</a></div>
+    </div></div></div>
+    <div class="col-lg-6"><div class="card h-100 shadow-sm"><div class="card-body d-flex flex-column p-4">
+      <div class="mb-3"><span class="badge bg-secondary">Option 2</span></div>
+      <h4>Upload Manual Invoice</h4><p class="text-muted">If you have already prepared the invoice using the existing Word template, upload it directly without completing the digital invoice form.</p>
+      <ul class="small text-muted"><li>Upload an existing Word invoice</li><li>Provide customer/insured name and purpose</li><li>Submit the document to Tax Compliance</li><li>Existing processing and return workflow remains unchanged</li></ul>
+      <div class="mt-auto"><a class="btn btn-outline-primary" href="{{ url_for('efd_request_manual_new') }}">Upload Manual Invoice</a></div>
+    </div></div></div>
+  </div>
+  <div class="mt-3"><a class="btn btn-link px-0" href="{{ url_for('efd_request_my') }}">← Back to My EFD Requests</a></div>
+</div>{% endblock %}

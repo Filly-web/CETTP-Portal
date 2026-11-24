@@ -2347,23 +2347,77 @@ EFD_REQUEST_ALLOWED = {"doc", "docx"}
 def _efd_request_ref():
     return f"EFD-{datetime.now():%Y}-{uuid.uuid4().hex[:8].upper()}"
 
-@app.route("/efd-requests/new", methods=["GET", "POST"])
+@app.route("/efd-requests/new", methods=["GET"])
 def efd_request_new():
     if session.get("role") != "initiator":
         return redirect(url_for("home"))
     return render_template("efd_request_new.html")
 
 
+@app.route("/efd-requests/manual/new", methods=["GET", "POST"])
+def efd_request_manual_new():
+    if session.get("role") != "initiator":
+        return redirect(url_for("home"))
+    if request.method == "GET":
+        return render_template("efd_request_manual_new.html")
+
+    supplier_name = (request.form.get("supplier_name") or "").strip()
+    purpose = (request.form.get("purpose") or "").strip()
+    upload = request.files.get("invoice_file")
+    if not supplier_name or not purpose or not upload or not upload.filename:
+        flash("Enter the customer/insured name and purpose, and attach the manual Word invoice.", "warning")
+        return redirect(url_for("efd_request_manual_new"))
+
+    filename = secure_filename(upload.filename)
+    extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    file_data = upload.read(EFD_REQUEST_MAX_BYTES + 1)
+    if extension not in EFD_REQUEST_ALLOWED or len(file_data) > EFD_REQUEST_MAX_BYTES:
+        flash("Attach a Word invoice (.doc or .docx) not exceeding 15 MB.", "danger")
+        return redirect(url_for("efd_request_manual_new"))
+
+    email = _initiator_email()
+    item = EFDInvoiceRequest(
+        reference=_efd_request_ref(), requester_email=email,
+        requester_name=session.get("actor_name", email), supplier_name=supplier_name,
+        purpose=purpose, original_filename=filename, original_file_data=file_data,
+        status="Pending"
+    )
+    db.session.add(item)
+    db.session.flush()
+    db.session.add(EFDRequestAudit(request_id=item.id, reference=item.reference,
+        actor=email, action="Manual invoice request submitted",
+        comment=f"Uploaded file: {filename}"))
+    db.session.commit()
+
+    subject = f"New manual EFD invoice request: {item.reference}"
+    body = (f"A manual tax invoice has been submitted for Tax Compliance processing.\n\n"
+            f"Reference: {item.reference}\nCustomer/Insured: {item.supplier_name}\n"
+            f"Initiator: {item.requester_name} ({item.requester_email})\n"
+            f"Purpose: {item.purpose}\nUploaded invoice: {item.original_filename}\n\n"
+            "Please log in to CETTP Tax Compliance Workplace to review and process.")
+    ok, err = _central_send_email("efd_invoice_requests", "request_submitted", subject,
+        body, recipients=["faugusti@britam.co.tz"], reference_id=item.id)
+    flash("Manual invoice request submitted for Tax Compliance processing." +
+          (" Tax Compliance was notified." if ok else f" Email notification failed: {err}"),
+          "success" if ok else "warning")
+    return redirect(url_for("efd_request_my"))
+
+
 def _digital_invoice_payload(form):
     fields = ["insured_name", "address", "customer_id", "vrn", "reference", "agent", "cover_type",
               "debit_note", "description", "prepared_by", "manager_name"]
     data = {key: (form.get(key) or "").strip() for key in fields}
+    # The preparer's identity must come from the authenticated CETTP account,
+    # not from a user-editable or potentially blank browser field.
+    data["prepared_by"] = (session.get("actor_name") or "").strip()
+    data["manager_date"] = datetime.now().strftime("%d/%m/%Y")
+    data["prepared_date"] = datetime.now().strftime("%d/%m/%Y")
     data["vat_rate"] = (form.get("vat_rate") or "").strip()
     try:
         data["net_amount"] = Decimal((form.get("net_amount") or "").replace(",", "").strip())
     except (InvalidOperation, AttributeError):
         data["net_amount"] = None
-    required = ["insured_name", "address", "customer_id", "reference", "cover_type", "debit_note", "description", "prepared_by", "manager_name"]
+    required = ["insured_name", "address", "customer_id", "reference", "cover_type", "debit_note", "description", "manager_name", "prepared_by"]
     missing = [key for key in required if not data.get(key)]
     if missing or data["vat_rate"] not in ("0", "18") or data["net_amount"] is None or data["net_amount"] <= 0:
         raise ValueError("Complete all mandatory fields, select VAT 0% or 18%, and enter a valid net premium amount.")
@@ -2392,8 +2446,10 @@ def _build_digital_invoice_docx(data, invoice_ref=None):
         "CETTP FILL IN COVER": data["cover_type"],
         "(CETTP FILL IN DEBIT NOTE NUMBER)": data["debit_note"],
         "(CETTP FILL IN MANAGER NAME)": data["manager_name"],
-        "Date Autodate is capture in by CETTP": datetime.now().strftime("%d/%m/%Y"),
+        "Date Autodate is capture in by CETTP": data.get("prepared_date") or datetime.now().strftime("%d/%m/%Y"),
+        "Name of Person prepare": data["prepared_by"],
         "CETTP": data["prepared_by"],
+        "CAPTURE DATE": data.get("manager_date") or datetime.now().strftime("%d/%m/%Y"),
         "Fill in Details of the Invoice": data["description"],
         "FILL AMOUNT – VAT INCLUSIVE": _money(data["gross_amount"]),
     }
@@ -2425,12 +2481,26 @@ def _build_digital_invoice_docx(data, invoice_ref=None):
             # The amount values are placed in the right-hand financial column.
             cell = row.cells[-1]
             cell.text = amount_lines
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
+            from docx.shared import RGBColor
             for para in cell.paragraphs:
-                for run in para.runs: run.font.highlight_color = None
+                para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+                for run in para.runs:
+                    run.font.highlight_color = None
+                    run.font.color.rgb = RGBColor(0, 0, 0)
             table._tbl.remove(table.rows[inactive_row]._tr)
-        # Replace the premium total in the first row's final cell.
+        # Replace the premium total in the first row's final cell and
+        # explicitly right-align it within the amount column.
         if len(table.rows):
-            table.rows[0].cells[-1].text = _money(data["gross_amount"])
+            total_cell = table.rows[0].cells[-1]
+            total_cell.text = _money(data["gross_amount"])
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
+            from docx.shared import RGBColor
+            for para in total_cell.paragraphs:
+                para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+                for run in para.runs:
+                    run.font.highlight_color = None
+                    run.font.color.rgb = RGBColor(0, 0, 0)
     out = BytesIO(); doc.save(out); out.seek(0)
     return out.getvalue()
 
