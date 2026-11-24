@@ -2505,6 +2505,13 @@ def _build_digital_invoice_docx(data, invoice_ref=None):
     return out.getvalue()
 
 
+@app.route("/efd-requests/digital/new", methods=["GET"])
+def efd_request_digital_form():
+    if session.get("role") != "initiator":
+        return redirect(url_for("home"))
+    return render_template("efd_request_digital_form.html", actor_name=session.get("actor_name", ""))
+
+
 @app.route("/efd-requests/digital/preview", methods=["POST"])
 def efd_request_digital_preview():
     if session.get("role") != "initiator": abort(403)
