@@ -348,6 +348,15 @@ class EFDInvoiceRequest(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
+class DigitalTaxInvoice(db.Model):
+    __tablename__ = "digital_tax_invoices"
+    id = db.Column(db.Integer, primary_key=True)
+    request_id = db.Column(db.Integer, db.ForeignKey("efd_invoice_requests.id", ondelete="CASCADE"), unique=True, nullable=False, index=True)
+    invoice_data = db.Column(db.Text, nullable=False)
+    vat_rate = db.Column(db.String(3), nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+
 class EFDRequestAudit(db.Model):
     __tablename__ = "efd_request_audit"
     id = db.Column(db.Integer, primary_key=True)
@@ -2342,36 +2351,154 @@ def _efd_request_ref():
 def efd_request_new():
     if session.get("role") != "initiator":
         return redirect(url_for("home"))
-    if request.method == "POST":
-        upload = request.files.get("invoice_file")
-        customer = request.form.get("customer_name", "").strip()
-        if not customer or not upload or not upload.filename:
-            flash("Customer name and mandatory Word invoice are required.", "warning")
-            return redirect(url_for("efd_request_new"))
-        filename = secure_filename(upload.filename)
-        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-        data = upload.read(EFD_REQUEST_MAX_BYTES + 1)
-        if ext not in EFD_REQUEST_ALLOWED or len(data) > EFD_REQUEST_MAX_BYTES:
-            flash("Attach a Word document (.doc or .docx) up to 15 MB.", "danger")
-            return redirect(url_for("efd_request_new"))
-        email = _initiator_email()
-        item = EFDInvoiceRequest(reference=_efd_request_ref(), requester_email=email,
-            requester_name=session.get("actor_name", email), supplier_name=customer,
-            purpose="", original_filename=filename, original_file_data=data, status="Pending")
-        db.session.add(item)
-        db.session.commit()
-        subject = f"New EFD invoice request: {item.reference}"
-        body = (f"A new EFD invoice request has been submitted.\\n\\nRequest: {item.reference}"
-                f"\\nCustomer: {customer}\\nRequester: {item.requester_name} ({email})"
-                f"\\n\\nLog in to CETTP Tax Compliance Workplace to review and process the request.")
-        email_ok, email_error = _central_send_email("efd_invoice_requests", "request_submitted",
-            subject, body, recipients=["faugusti@britam.co.tz"], reference_id=item.id)
-        if email_ok:
-            flash(f"Request {item.reference} submitted. Tax Compliance was notified.", "success")
-        else:
-            flash(f"Request {item.reference} was saved, BUT email to faugusti@britam.co.tz failed: {email_error}", "danger")
-        return redirect(url_for("efd_request_my"))
     return render_template("efd_request_new.html")
+
+
+def _digital_invoice_payload(form):
+    fields = ["insured_name", "address", "customer_id", "vrn", "reference", "agent", "cover_type",
+              "debit_note", "description", "prepared_by", "manager_name"]
+    data = {key: (form.get(key) or "").strip() for key in fields}
+    data["vat_rate"] = (form.get("vat_rate") or "").strip()
+    try:
+        data["net_amount"] = Decimal((form.get("net_amount") or "").replace(",", "").strip())
+    except (InvalidOperation, AttributeError):
+        data["net_amount"] = None
+    required = ["insured_name", "address", "customer_id", "reference", "cover_type", "debit_note", "description", "prepared_by", "manager_name"]
+    missing = [key for key in required if not data.get(key)]
+    if missing or data["vat_rate"] not in ("0", "18") or data["net_amount"] is None or data["net_amount"] <= 0:
+        raise ValueError("Complete all mandatory fields, select VAT 0% or 18%, and enter a valid net premium amount.")
+    data["vat_amount"] = (data["net_amount"] * Decimal(data["vat_rate"]) / Decimal("100")).quantize(Decimal("0.01"))
+    data["gross_amount"] = (data["net_amount"] + data["vat_amount"]).quantize(Decimal("0.01"))
+    return data
+
+
+def _money(value):
+    return f"{Decimal(value):,.2f}"
+
+
+def _build_digital_invoice_docx(data, invoice_ref=None):
+    from docx import Document
+    from docx.enum.text import WD_COLOR_INDEX
+    from pathlib import Path
+    template_path = Path(app.root_path) / "templates" / "digital_tax_invoice_template.docx"
+    doc = Document(str(template_path))
+    replacements = {
+        "(CETTP FILL THE INSURED NAME)": data["insured_name"],
+        "CETTP FILL ADDRESS": data["address"],
+        "CETTP FILL THE CUSTOMER ID": data["customer_id"],
+        "CETTP FILL THE VRN": data.get("vrn") or "—",
+        "(CETTP FILL IN A REFERENCE OF THE INVOICE)": data["reference"],
+        "CETTP FILL IN AGENT": data.get("agent") or "—",
+        "CETTP FILL IN COVER": data["cover_type"],
+        "(CETTP FILL IN DEBIT NOTE NUMBER)": data["debit_note"],
+        "(CETTP FILL IN MANAGER NAME)": data["manager_name"],
+        "Date Autodate is capture in by CETTP": datetime.now().strftime("%d/%m/%Y"),
+        "CETTP": data["prepared_by"],
+        "Fill in Details of the Invoice": data["description"],
+        "FILL AMOUNT – VAT INCLUSIVE": _money(data["gross_amount"]),
+    }
+    def replace_para(paragraph):
+        original = paragraph.text
+        changed = original
+        for old, new_value in replacements.items():
+            changed = changed.replace(old, str(new_value))
+        if changed != original:
+            if paragraph.runs:
+                paragraph.runs[0].text = changed
+                for run in paragraph.runs[1:]: run.text = ""
+            else: paragraph.add_run(changed)
+        for run in paragraph.runs:
+            run.font.highlight_color = None
+    for para in doc.paragraphs: replace_para(para)
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for para in cell.paragraphs: replace_para(para)
+    # Populate the amount cells and remove the unused VAT calculation section.
+    if doc.tables:
+        table = doc.tables[0]
+        if len(table.rows) >= 3:
+            active_row = 1 if data["vat_rate"] == "0" else 2
+            inactive_row = 2 if active_row == 1 else 1
+            row = table.rows[active_row]
+            amount_lines = f"{_money(data['net_amount'])}\n{_money(data['vat_amount'])}\n{_money(data['gross_amount'])}"
+            # The amount values are placed in the right-hand financial column.
+            cell = row.cells[-1]
+            cell.text = amount_lines
+            for para in cell.paragraphs:
+                for run in para.runs: run.font.highlight_color = None
+            table._tbl.remove(table.rows[inactive_row]._tr)
+        # Replace the premium total in the first row's final cell.
+        if len(table.rows):
+            table.rows[0].cells[-1].text = _money(data["gross_amount"])
+    out = BytesIO(); doc.save(out); out.seek(0)
+    return out.getvalue()
+
+
+@app.route("/efd-requests/digital/preview", methods=["POST"])
+def efd_request_digital_preview():
+    if session.get("role") != "initiator": abort(403)
+    try:
+        data = _digital_invoice_payload(request.form)
+    except ValueError as exc:
+        flash(str(exc), "warning")
+        return redirect(url_for("efd_request_new"))
+    import json, base64
+    session["digital_invoice_draft"] = {k: str(v) if isinstance(v, Decimal) else v for k, v in data.items()}
+    return render_template("digital_invoice_preview.html", data=data)
+
+
+@app.route("/efd-requests/digital/preview.docx")
+def efd_request_digital_preview_docx():
+    if session.get("role") != "initiator": abort(403)
+    import json
+    data = session.get("digital_invoice_draft")
+    if not data: abort(404)
+    for key in ("net_amount", "vat_amount", "gross_amount"): data[key] = Decimal(data[key])
+    return send_file(BytesIO(_build_digital_invoice_docx(data)), as_attachment=True,
+                     download_name="Digital_Tax_Invoice_Preview.docx",
+                     mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+
+@app.route("/efd-requests/digital/submit", methods=["POST"])
+def efd_request_digital_submit():
+    if session.get("role") != "initiator": abort(403)
+    import json
+    data = session.get("digital_invoice_draft")
+    if not data: abort(400)
+    for key in ("net_amount", "vat_amount", "gross_amount"): data[key] = Decimal(data[key])
+    generated = _build_digital_invoice_docx(data)
+    email = _initiator_email()
+    item = EFDInvoiceRequest(reference=_efd_request_ref(), requester_email=email,
+        requester_name=session.get("actor_name", email), supplier_name=data["insured_name"],
+        purpose=data["description"], original_filename="Digital_Tax_Invoice.docx",
+        original_file_data=generated, status="Draft")
+    db.session.add(item); db.session.flush()
+    db.session.add(DigitalTaxInvoice(request_id=item.id, invoice_data=json.dumps({k: str(v) if isinstance(v, Decimal) else v for k,v in data.items()}), vat_rate=data["vat_rate"]))
+    db.session.commit()
+    session.pop("digital_invoice_draft", None)
+    return redirect(url_for("efd_request_digital_confirm", request_id=item.id))
+
+
+@app.route("/efd-requests/<int:request_id>/digital-confirm", methods=["GET", "POST"])
+def efd_request_digital_confirm(request_id):
+    if session.get("role") not in ("initiator", "tax", "admin"): abort(403)
+    item = EFDInvoiceRequest.query.get_or_404(request_id)
+    if session.get("role") == "initiator" and item.requester_email != _initiator_email(): abort(403)
+    invoice = DigitalTaxInvoice.query.filter_by(request_id=item.id).first_or_404()
+    import json
+    data = json.loads(invoice.invoice_data)
+    if request.method == "POST":
+        if session.get("role") != "initiator" or item.status != "Draft": abort(403)
+        item.status = "Pending"; item.updated_at = datetime.utcnow()
+        db.session.add(EFDRequestAudit(request_id=item.id, reference=item.reference, actor=_initiator_email(), action="Digital invoice confirmed and submitted", comment=f"VAT rate: {invoice.vat_rate}%"))
+        db.session.commit()
+        subject = f"New digital tax invoice request: {item.reference}"
+        body = f"A digital tax invoice is awaiting Tax Compliance processing.\n\nReference: {item.reference}\nInsured: {item.supplier_name}\nVAT rate: {invoice.vat_rate}%\nRequester: {item.requester_email}\n\nPlease log in to CETTP Tax Compliance Workplace."
+        ok, err = _central_send_email("efd_invoice_requests", "request_submitted", subject, body, recipients=["faugusti@britam.co.tz"], reference_id=item.id)
+        flash("Digital invoice submitted for Tax Compliance processing." + (" Tax Compliance was notified." if ok else f" Email notification failed: {err}"), "success" if ok else "warning")
+        return redirect(url_for("efd_request_my"))
+    return render_template("digital_invoice_confirm.html", item=item, data=data, vat_rate=invoice.vat_rate)
 
 @app.route("/efd-requests/my")
 def efd_request_my():
@@ -2382,7 +2509,7 @@ def efd_request_my():
 @app.route("/efd-requests/workplace")
 def efd_request_workplace():
     if session.get("role") not in ("tax", "admin"): return redirect(url_for("home"))
-    rows=EFDInvoiceRequest.query.filter(EFDInvoiceRequest.status != "Deleted").order_by(EFDInvoiceRequest.created_at.desc()).all()
+    rows=EFDInvoiceRequest.query.filter(EFDInvoiceRequest.status.notin_(["Deleted", "Draft"])).order_by(EFDInvoiceRequest.created_at.desc()).all()
     return render_template("efd_request_workplace.html", requests=rows)
 
 @app.route("/efd-requests/<int:request_id>")
@@ -2400,7 +2527,8 @@ def efd_request_detail(request_id):
                 preview.append(" | ".join(cell.text.strip() for cell in row.cells))
     except Exception:
         preview=["Inline preview unavailable for this Word format; use the open/view link."]
-    return render_template("efd_request_detail.html", item=item, original_preview=preview)
+    digital_invoice = DigitalTaxInvoice.query.filter_by(request_id=item.id).first()
+    return render_template("efd_request_detail.html", item=item, original_preview=preview, digital_invoice=digital_invoice)
 
 @app.route("/efd-requests/<int:request_id>/return", methods=["POST"])
 def efd_request_return(request_id):

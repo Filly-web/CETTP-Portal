@@ -1,7 +1,26 @@
-{% extends 'base.html' %}{% block title %}Request EFD Invoice{% endblock %}{% block content %}
-<div class="container-fluid py-3"><h2>Request EFD Invoice</h2><p class="text-muted">Submit the customer's invoice for EFD processing.</p>
-<div class="card shadow-sm"><div class="card-body"><form method="post" enctype="multipart/form-data">
+{% extends 'base.html' %}{% block title %}Create Digital Tax Invoice{% endblock %}{% block content %}
+<div class="container-fluid py-3"><div class="d-flex justify-content-between align-items-center flex-wrap gap-2"><div><h2>Create Digital Tax Invoice</h2><p class="text-muted mb-0">Complete the invoice details, select the VAT rate and preview the Word invoice before submission.</p></div><span class="badge bg-primary">Digital Invoice</span></div>
+<form method="post" action="{{ url_for('efd_request_digital_preview') }}" class="mt-3">
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-<div class="mb-3"><label class="form-label">Customer Name *</label><input class="form-control" name="customer_name" maxlength="180" required></div>
-<div class="mb-3"><label class="form-label">Customer Invoice (Word document) *</label><input class="form-control" type="file" name="invoice_file" accept=".doc,.docx" required><div class="form-text">Only Word documents (.doc or .docx), maximum 15 MB.</div></div>
-<button class="btn btn-primary" type="submit">Submit EFD Invoice Request</button></form></div></div></div>{% endblock %}
+<div class="card shadow-sm mb-3"><div class="card-header fw-semibold">Insured and Customer Details</div><div class="card-body"><div class="row g-3">
+<div class="col-md-6"><label class="form-label">Name of Insured *</label><input class="form-control" name="insured_name" required maxlength="180"></div>
+<div class="col-md-6"><label class="form-label">Address *</label><input class="form-control" name="address" required maxlength="255"></div>
+<div class="col-md-6"><label class="form-label">Customer ID *</label><input class="form-control" name="customer_id" required maxlength="100"></div>
+<div class="col-md-6"><label class="form-label">VRN</label><input class="form-control" name="vrn" maxlength="40"></div>
+<div class="col-md-6"><label class="form-label">Reference *</label><input class="form-control" name="reference" required maxlength="100"></div>
+<div class="col-md-6"><label class="form-label">Agent</label><input class="form-control" name="agent" maxlength="180"></div>
+<div class="col-md-6"><label class="form-label">Type of Cover *</label><input class="form-control" name="cover_type" required maxlength="180"></div>
+<div class="col-md-6"><label class="form-label">Debit Note Number *</label><input class="form-control" name="debit_note" required maxlength="100"></div>
+<div class="col-12"><label class="form-label">Details of the Invoice *</label><textarea class="form-control" name="description" rows="3" required maxlength="1500"></textarea></div>
+</div></div></div>
+<div class="card shadow-sm mb-3"><div class="card-header fw-semibold">Premium and VAT Calculation</div><div class="card-body"><div class="row g-3">
+<div class="col-md-6"><label class="form-label">VAT Rate *</label><select class="form-select" name="vat_rate" required><option value="">Select VAT rate</option><option value="0">0% VAT</option><option value="18">18% VAT</option></select><div class="form-text">The invoice will display only the selected VAT calculation section.</div></div>
+<div class="col-md-6"><label class="form-label">Net Amount (TZS) *</label><input class="form-control" type="number" name="net_amount" min="0.01" step="0.01" required></div>
+<div class="col-md-4"><label class="form-label">VAT Amount</label><input class="form-control" value="Automatically calculated" readonly></div><div class="col-md-4"><label class="form-label">Gross Premium</label><input class="form-control" value="Automatically calculated" readonly></div><div class="col-md-4"><label class="form-label">Currency</label><input class="form-control" value="TZS" readonly></div>
+</div></div></div>
+<div class="card shadow-sm mb-3"><div class="card-header fw-semibold">Invoice Preparation and Approval Details</div><div class="card-body"><div class="row g-3">
+<div class="col-md-6"><label class="form-label">Prepared By *</label><input class="form-control" name="prepared_by" value="{{ session.get('actor_name','') }}" required maxlength="160"></div>
+<div class="col-md-6"><label class="form-label">Manager Name *</label><input class="form-control" name="manager_name" required maxlength="160"></div>
+</div><div class="alert alert-info mt-3 mb-0">The preparation date will be captured automatically. Manager signature and approval date will remain available for completion through the existing approval process.</div></div></div>
+<div class="d-flex justify-content-end"><button class="btn btn-primary" type="submit">Generate Word Preview</button></div>
+</form></div>{% endblock %}
