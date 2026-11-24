@@ -59,7 +59,7 @@ class CETTPUser(db.Model):
 
 
 # Integrated EFD-to-Invoice utility, available from the portal selection screen.
-from efd_portal import efd_bp
+from efd_portal import efd_bp, make_verification_url, make_qr_image, normalize_time
 app.register_blueprint(efd_bp, url_prefix="/efd-invoice")
 
 STATUSES = [
@@ -2421,6 +2421,8 @@ def _digital_invoice_payload(form):
     missing = [key for key in required if not data.get(key)]
     if missing or data["vat_rate"] not in ("0", "18") or data["net_amount"] is None or data["net_amount"] <= 0:
         raise ValueError("Complete all mandatory fields, select VAT 0% or 18%, and enter a valid net premium amount.")
+    if len(data["description"]) > 300:
+        raise ValueError("Invoice description must not exceed 300 characters so the generated invoice remains on one page.")
     data["vat_amount"] = (data["net_amount"] * Decimal(data["vat_rate"]) / Decimal("100")).quantize(Decimal("0.01"))
     data["gross_amount"] = (data["net_amount"] + data["vat_amount"]).quantize(Decimal("0.01"))
     return data
@@ -2466,6 +2468,21 @@ def _build_digital_invoice_docx(data, invoice_ref=None):
         for run in paragraph.runs:
             run.font.highlight_color = None
     for para in doc.paragraphs: replace_para(para)
+    # Normalize the invoice heading so legacy tab stops cannot split TAX and INVOICE.
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Pt
+    for para in doc.paragraphs:
+        normalized_heading = " ".join(para.text.upper().split())
+        if normalized_heading == "TAX INVOICE":
+            para.clear()
+            para.style = doc.styles["Normal"]
+            para.paragraph_format.tab_stops.clear_all()
+            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            heading = para.add_run("TAX INVOICE")
+            heading.bold = True
+            heading.font.size = Pt(16)
+            para.paragraph_format.space_before = Pt(2)
+            para.paragraph_format.space_after = Pt(4)
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
@@ -2501,8 +2518,72 @@ def _build_digital_invoice_docx(data, invoice_ref=None):
                 for run in para.runs:
                     run.font.highlight_color = None
                     run.font.color.rgb = RGBColor(0, 0, 0)
+    # Keep the generated invoice compact and on a single A4 page.
+    from docx.shared import Inches, Pt
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    for section in doc.sections:
+        section.top_margin = Inches(0.48)
+        section.bottom_margin = Inches(0.32)
+        section.left_margin = Inches(0.42)
+        section.right_margin = Inches(0.42)
+    # Remove empty body paragraphs (including the blank line between address and Customer ID).
+    for paragraph in list(doc.paragraphs):
+        has_drawing = bool(paragraph._p.xpath('.//w:drawing') or paragraph._p.xpath('.//w:pict'))
+        if not paragraph.text.strip() and not has_drawing:
+            paragraph._element.getparent().remove(paragraph._element)
+        else:
+            paragraph.paragraph_format.space_before = Pt(0)
+            paragraph.paragraph_format.space_after = Pt(0)
+            paragraph.paragraph_format.line_spacing = 1.0
+    for tbl in doc.tables:
+        for row in tbl.rows:
+            tr_pr = row._tr.get_or_add_trPr()
+            if tr_pr.find(qn('w:cantSplit')) is None:
+                tr_pr.append(OxmlElement('w:cantSplit'))
+            for cell in row.cells:
+                for para in cell.paragraphs:
+                    para.paragraph_format.space_before = Pt(0)
+                    para.paragraph_format.space_after = Pt(0)
+                    para.paragraph_format.line_spacing = 1.0
+    # Remove the unused empty trailing table in the supplied template; it can force a blank second page.
+    for tbl in list(doc.tables[1:]):
+        if not any(cell.text.strip() for row in tbl.rows for cell in row.cells) and not tbl._tbl.xpath('.//w:drawing'):
+            tbl._element.getparent().remove(tbl._element)
     out = BytesIO(); doc.save(out); out.seek(0)
     return out.getvalue()
+
+
+def _build_processed_digital_invoice_docx(original_data, verification_code, receipt_time):
+    """Embed TRA verification details and QR into the existing digital invoice without a re-upload."""
+    from docx import Document
+    from docx.shared import Inches, Pt
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from io import BytesIO
+    doc = Document(BytesIO(original_data))
+    verification_url = make_verification_url(verification_code, receipt_time)
+    qr_buffer = make_qr_image(verification_url)
+    if not doc.tables or len(doc.tables[0].rows) < 6:
+        raise ValueError('The digital invoice template does not contain the expected footer area for EFD details.')
+    # The existing invoice footer has unused cells alongside the bank details. Use the far-right cell
+    # so the EFD block remains inside the invoice's existing one-page table layout.
+    cell = doc.tables[0].rows[-1].cells[-1]
+    cell.text = ''
+    para = cell.paragraphs[0]
+    para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    para.paragraph_format.space_before = Pt(0)
+    para.paragraph_format.space_after = Pt(0)
+    run = para.add_run('EFD DETAILS\n')
+    run.bold = True; run.font.size = Pt(7)
+    run = para.add_run(f'Code: {verification_code}\nTime: {receipt_time}\n')
+    run.font.size = Pt(6)
+    qr_buffer.seek(0)
+    para.add_run().add_picture(qr_buffer, width=Inches(0.72))
+    for section in doc.sections:
+        section.top_margin = Inches(0.48); section.bottom_margin = Inches(0.32)
+        section.left_margin = Inches(0.42); section.right_margin = Inches(0.42)
+    out = BytesIO(); doc.save(out); out.seek(0)
+    return out.getvalue(), verification_url
 
 
 @app.route("/efd-requests/digital/new", methods=["GET"])
@@ -2727,24 +2808,65 @@ def efd_request_processed(request_id):
 def efd_request_process(request_id):
     if session.get("role") not in ("tax", "admin"): abort(403)
     item=EFDInvoiceRequest.query.get_or_404(request_id)
-    code=request.form.get("verification_code", "").strip() or None; receipt=request.form.get("receipt_time", "").strip() or None
+    code=(request.form.get("verification_code", "") or "").strip()
+    raw_receipt=(request.form.get("receipt_time", "") or "").strip()
+    digital_invoice = DigitalTaxInvoice.query.filter_by(request_id=item.id).first()
     processed=request.files.get("processed_file")
-    if not processed or not processed.filename:
-        flash("The processed invoice file is required.", "warning"); return redirect(url_for("efd_request_detail", request_id=item.id))
-    fname=secure_filename(processed.filename); ext=fname.rsplit(".",1)[-1].lower() if "." in fname else ""
-    data=processed.read(EFD_REQUEST_MAX_BYTES+1)
-    if ext not in EFD_REQUEST_ALLOWED or len(data)>EFD_REQUEST_MAX_BYTES:
-        flash("Processed invoice must be a Word file up to 15 MB.", "danger"); return redirect(url_for("efd_request_detail", request_id=item.id))
-    item.verification_code=code; item.receipt_time=receipt; item.processed_filename=fname; item.processed_file_data=data
-    item.status="Completed"; item.updated_at=datetime.utcnow(); db.session.commit()
+
+    if not code or not raw_receipt:
+        flash("Enter the TRA verification code and receipt time.", "warning")
+        return redirect(url_for("efd_request_detail", request_id=item.id))
+    try:
+        receipt = normalize_time(raw_receipt)
+    except ValueError as exc:
+        flash(str(exc), "warning")
+        return redirect(url_for("efd_request_detail", request_id=item.id))
+
+    if digital_invoice:
+        # Digital invoices already exist in CETTP; generate the final Word document and QR internally.
+        try:
+            data, verification_url = _build_processed_digital_invoice_docx(
+                item.original_file_data, code, receipt)
+        except Exception as exc:
+            app.logger.exception("Unable to generate processed digital invoice %s", item.reference)
+            flash(f"Could not generate the processed digital invoice: {exc}", "danger")
+            return redirect(url_for("efd_request_detail", request_id=item.id))
+        fname = f"{item.reference}_Processed_Tax_Invoice.docx"
+        item.processed_filename = fname
+        item.processed_file_data = data
+        action_comment = f"Digital invoice processed internally; receipt time {receipt}; verification URL {verification_url}"
+    else:
+        # Manual invoice requests retain the existing processed-document upload process.
+        if not processed or not processed.filename:
+            flash("Upload the processed Word invoice for this manual request.", "warning")
+            return redirect(url_for("efd_request_detail", request_id=item.id))
+        fname=secure_filename(processed.filename); ext=fname.rsplit(".",1)[-1].lower() if "." in fname else ""
+        data=processed.read(EFD_REQUEST_MAX_BYTES+1)
+        if ext not in EFD_REQUEST_ALLOWED or len(data)>EFD_REQUEST_MAX_BYTES:
+            flash("Processed invoice must be a Word file up to 15 MB.", "danger")
+            return redirect(url_for("efd_request_detail", request_id=item.id))
+        item.processed_filename=fname
+        item.processed_file_data=data
+        action_comment = f"Manual invoice processed; processed document uploaded; receipt time {receipt}"
+
+    item.verification_code=code
+    item.receipt_time=receipt
+    item.status="Completed"
+    item.updated_at=datetime.utcnow()
+    db.session.add(EFDRequestAudit(request_id=item.id, reference=item.reference,
+        actor=session.get("actor_name", "Tax Compliance"), action="Invoice processed", comment=action_comment))
+    db.session.commit()
     subject=f"Your EFD invoice request has been processed: {item.reference}"
-    body=f"Your EFD invoice request has been processed and is ready for download in CETTP.\n\nRequest: {item.reference}\nSupplier: {item.supplier_name}" + (f"\nVerification code: {code}" if code else "") + (f"\nReceipt time: {receipt}" if receipt else "") + "\n\nLog in to the Initiator Portal and open your request to download the processed invoice."
+    body=(f"Your EFD invoice request has been processed and is ready for download in CETTP.\n\n"
+          f"Request: {item.reference}\nSupplier: {item.supplier_name}\n"
+          f"Verification code: {code}\nReceipt time: {receipt}\n\n"
+          "Log in to the Initiator Portal and open your request to download the final Word invoice with its QR code.")
     email_ok, email_error = _central_send_email("efd_invoice_requests", "request_processed", subject, body,
         recipients=[item.requester_email], reference_id=item.id)
     if email_ok:
-        flash("Request completed and notification sent to the initiator.", "success")
+        flash("Request completed. The final Word invoice and QR code were generated in CETTP, and the initiator was notified.", "success")
     else:
-        flash(f"Invoice saved and request completed, BUT notification to {item.requester_email} failed: {email_error}", "danger")
+        flash(f"Invoice generated and saved, BUT notification to {item.requester_email} failed: {email_error}", "danger")
     return redirect(url_for("efd_request_detail", request_id=item.id))
 
 @app.route("/efd-requests/<int:request_id>/retry-email", methods=["POST"])
