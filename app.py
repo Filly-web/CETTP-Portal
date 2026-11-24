@@ -2536,11 +2536,17 @@ def _build_digital_invoice_docx(data, invoice_ref=None):
             total_cell = table.rows[0].cells[-1]
             total_cell.text = _money(total_gross)
             from docx.enum.text import WD_ALIGN_PARAGRAPH
+            from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
             from docx.shared import RGBColor, Pt
+            # The template places the "Total Premium" label at the bottom of
+            # the left cell. Vertically align the amount to the same baseline,
+            # while keeping it right-aligned within the amount column.
+            total_cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.BOTTOM
             for para in total_cell.paragraphs:
                 para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
                 para.paragraph_format.space_before = Pt(0)
                 para.paragraph_format.space_after = Pt(0)
+                para.paragraph_format.line_spacing = 1.0
                 for run in para.runs:
                     run.font.highlight_color = None
                     run.font.color.rgb = RGBColor(0, 0, 0)
