@@ -2487,34 +2487,45 @@ def _build_digital_invoice_docx(data, invoice_ref=None):
         for row in table.rows:
             for cell in row.cells:
                 for para in cell.paragraphs: replace_para(para)
-    # Populate the amount cells and remove the unused VAT calculation section.
+    # Preserve BOTH premium calculation sections from the supplied Britam template.
+    # The 0% and 18% rows are alternative calculations, not duplicate rows to delete.
+    # Populate each row with its own VAT calculation while the selected VAT rate
+    # controls the Total Premium figure and the final invoice's applicable amount.
     if doc.tables:
         table = doc.tables[0]
         if len(table.rows) >= 3:
-            active_row = 1 if data["vat_rate"] == "0" else 2
-            inactive_row = 2 if active_row == 1 else 1
-            row = table.rows[active_row]
-            amount_lines = f"{_money(data['net_amount'])}\n{_money(data['vat_amount'])}\n{_money(data['gross_amount'])}"
-            # The amount values are placed in the right-hand financial column.
-            cell = row.cells[-1]
-            cell.text = amount_lines
-            from docx.enum.text import WD_ALIGN_PARAGRAPH
-            from docx.shared import RGBColor
-            for para in cell.paragraphs:
-                para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-                for run in para.runs:
-                    run.font.highlight_color = None
-                    run.font.color.rgb = RGBColor(0, 0, 0)
-            table._tbl.remove(table.rows[inactive_row]._tr)
-        # Replace the premium total in the first row's final cell and
-        # explicitly right-align it within the amount column.
-        if len(table.rows):
+            net_amount = Decimal(str(data["net_amount"]))
+            selected_rate = Decimal(str(data["vat_rate"]))
+            for row_index, row_rate in ((1, Decimal("0")), (2, Decimal("18"))):
+                row_vat = (net_amount * row_rate / Decimal("100")).quantize(Decimal("0.01"))
+                row_gross = net_amount + row_vat
+                amount_lines = (
+                    f"{_money(net_amount)}\n"
+                    f"{_money(row_vat)}\n"
+                    f"{_money(row_gross)}"
+                )
+                cell = table.rows[row_index].cells[-1]
+                cell.text = amount_lines
+                from docx.enum.text import WD_ALIGN_PARAGRAPH
+                from docx.shared import RGBColor, Pt
+                for para in cell.paragraphs:
+                    para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+                    para.paragraph_format.space_before = Pt(0)
+                    para.paragraph_format.space_after = Pt(0)
+                    for run in para.runs:
+                        run.font.highlight_color = None
+                        run.font.color.rgb = RGBColor(0, 0, 0)
+                # Retain the template's original row labels and styling.
+            # The top Total Premium must agree with the VAT rate selected by the Initiator.
+            total_gross = net_amount + (net_amount * selected_rate / Decimal("100")).quantize(Decimal("0.01"))
             total_cell = table.rows[0].cells[-1]
-            total_cell.text = _money(data["gross_amount"])
+            total_cell.text = _money(total_gross)
             from docx.enum.text import WD_ALIGN_PARAGRAPH
-            from docx.shared import RGBColor
+            from docx.shared import RGBColor, Pt
             for para in total_cell.paragraphs:
                 para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+                para.paragraph_format.space_before = Pt(0)
+                para.paragraph_format.space_after = Pt(0)
                 for run in para.runs:
                     run.font.highlight_color = None
                     run.font.color.rgb = RGBColor(0, 0, 0)
