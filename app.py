@@ -13,7 +13,7 @@ from sqlalchemy import or_, func, delete, inspect, text, Boolean
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 from io import BytesIO
-import csv, io, smtplib, ssl, logging, hashlib, hmac
+import csv, io, smtplib, ssl, logging, hashlib, hmac, re
 from email.message import EmailMessage
 from decimal import Decimal, InvalidOperation
 from sqlalchemy import UniqueConstraint
@@ -194,6 +194,37 @@ class ReconciliationItem(db.Model):
     @property
     def variance(self):
         return Decimal(str(self.book_amount or 0)) - Decimal(str(self.tra_amount or 0))
+
+class VATReconBatch(db.Model):
+    __tablename__ = "vat_recon_batches"
+    id = db.Column(db.Integer, primary_key=True)
+    period = db.Column(db.String(7), nullable=False, index=True)
+    source = db.Column(db.String(30), nullable=False, index=True)
+    filename = db.Column(db.String(255), nullable=False)
+    file_sha256 = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    row_count = db.Column(db.Integer, nullable=False, default=0)
+    imported_by = db.Column(db.String(120), nullable=False)
+    imported_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
+class VATReconTransaction(db.Model):
+    __tablename__ = "vat_recon_transactions"
+    id = db.Column(db.Integer, primary_key=True)
+    batch_id = db.Column(db.Integer, db.ForeignKey("vat_recon_batches.id", ondelete="CASCADE"), nullable=False, index=True)
+    period = db.Column(db.String(7), nullable=False, index=True)
+    source = db.Column(db.String(30), nullable=False, index=True)
+    reference = db.Column(db.String(150), index=True)
+    transaction_date = db.Column(db.Date)
+    counterparty = db.Column(db.String(255), index=True)
+    tin = db.Column(db.String(40), index=True)
+    category = db.Column(db.String(100), index=True)
+    vat_rate = db.Column(db.Numeric(6,2))
+    taxable_value = db.Column(db.Numeric(20,2), nullable=False, default=0)
+    vat_amount = db.Column(db.Numeric(20,2), nullable=False, default=0)
+    gross_amount = db.Column(db.Numeric(20,2), nullable=False, default=0)
+    description = db.Column(db.Text)
+    batch = db.relationship("VATReconBatch", backref=db.backref("transactions", lazy=True, cascade="all, delete-orphan"))
+
 
 class SupplierTINImportBatch(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -1660,6 +1691,173 @@ def reconciliation_delete(item_id):
     db.session.delete(item); db.session.commit()
     flash("Reconciliation row deleted.", "success")
     return redirect(url_for("reconciliation_home", type=kind))
+
+# Transaction-level VAT reconciliation workspace (separate from the VAT control-account ledger).
+VAT_RECON_SOURCES = {
+    "AIMS_PREMIUM": "AIMS Premium Register",
+    "AIMS_COMMISSION": "AIMS Commission Register",
+    "EFDMS": "EFDMS Fiscal Transactions",
+    "GL_OUTPUT": "General Ledger – Output VAT / Sales",
+    "GL_INPUT": "General Ledger – Input VAT",
+    "VAT_RETURN": "TRA VAT Return Summary",
+}
+VAT_RECON_HEADERS = ["period", "reference", "transaction_date", "counterparty", "tin", "category", "vat_rate", "taxable_value", "vat_amount", "gross_amount", "description"]
+
+
+def _vat_recon_decimal(value, field, row_number):
+    if value in (None, ""):
+        return Decimal("0.00")
+    try:
+        return Decimal(str(value).replace(",", "").strip()).quantize(Decimal("0.01"))
+    except Exception:
+        raise ValueError(f"Row {row_number}: invalid {field} value '{value}'.")
+
+
+def _vat_recon_date(value):
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    raw = str(value).strip()
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%m/%d/%Y"):
+        try: return datetime.strptime(raw[:10], fmt).date()
+        except ValueError: pass
+    raise ValueError(f"Invalid transaction_date '{value}'. Use YYYY-MM-DD or DD/MM/YYYY.")
+
+
+def _vat_recon_norm(value):
+    return "".join(ch for ch in str(value or "").upper().strip() if ch.isalnum())
+
+
+def _vat_recon_analysis(period, batches):
+    txns = VATReconTransaction.query.filter_by(period=period).order_by(VATReconTransaction.id.asc()).all()
+    grouped = {}
+    for t in txns:
+        key = _vat_recon_norm(t.reference)
+        if not key:
+            continue
+        grouped.setdefault(key, {}).setdefault(t.source, []).append(t)
+    exceptions = []
+    matched = 0
+    for key, sources in grouped.items():
+        aims = sources.get("AIMS_PREMIUM", []) + sources.get("AIMS_COMMISSION", [])
+        efd = sources.get("EFDMS", [])
+        if aims and efd:
+            av = sum((Decimal(str(x.taxable_value or 0)) for x in aims), Decimal("0"))
+            ev = sum((Decimal(str(x.taxable_value or 0)) for x in efd), Decimal("0"))
+            at = sum((Decimal(str(x.vat_amount or 0)) for x in aims), Decimal("0"))
+            et = sum((Decimal(str(x.vat_amount or 0)) for x in efd), Decimal("0"))
+            if abs(av-ev) > Decimal("1.00") or abs(at-et) > Decimal("1.00"):
+                exceptions.append({"reference": aims[0].reference or efd[0].reference, "type": "Value variance", "aims_value": av, "efd_value": ev, "aims_vat": at, "efd_vat": et, "category": aims[0].category or efd[0].category, "counterparty": aims[0].counterparty or efd[0].counterparty})
+            else:
+                matched += 1
+        elif aims:
+            exceptions.append({"reference": aims[0].reference, "type": "Missing EFDMS record", "aims_value": sum((Decimal(str(x.taxable_value or 0)) for x in aims), Decimal("0")), "efd_value": Decimal("0"), "aims_vat": sum((Decimal(str(x.vat_amount or 0)) for x in aims), Decimal("0")), "efd_vat": Decimal("0"), "category": aims[0].category, "counterparty": aims[0].counterparty})
+        elif efd:
+            exceptions.append({"reference": efd[0].reference, "type": "Missing AIMS record", "aims_value": Decimal("0"), "efd_value": sum((Decimal(str(x.taxable_value or 0)) for x in efd), Decimal("0")), "aims_vat": Decimal("0"), "efd_vat": sum((Decimal(str(x.vat_amount or 0)) for x in efd), Decimal("0")), "category": efd[0].category, "counterparty": efd[0].counterparty})
+    # Arithmetic validation is only performed where the source explicitly supplies a VAT rate.
+    for t in txns:
+        if t.vat_rate is not None:
+            expected = (Decimal(str(t.taxable_value or 0)) * Decimal(str(t.vat_rate)) / Decimal("100")).quantize(Decimal("0.01"))
+            actual = Decimal(str(t.vat_amount or 0))
+            if abs(expected - actual) > Decimal("1.00"):
+                exceptions.append({"reference": t.reference, "type": "VAT arithmetic variance", "aims_value": Decimal(str(t.taxable_value or 0)) if t.source.startswith("AIMS") else Decimal("0"), "efd_value": Decimal(str(t.taxable_value or 0)) if t.source == "EFDMS" else Decimal("0"), "aims_vat": actual if t.source.startswith("AIMS") else Decimal("0"), "efd_vat": actual if t.source == "EFDMS" else Decimal("0"), "category": t.category, "counterparty": t.counterparty})
+    totals = {}
+    for source, label in VAT_RECON_SOURCES.items():
+        rows = [x for x in txns if x.source == source]
+        totals[source] = {"label": label, "count": len(rows), "taxable": sum((Decimal(str(x.taxable_value or 0)) for x in rows), Decimal("0")), "vat": sum((Decimal(str(x.vat_amount or 0)) for x in rows), Decimal("0")), "gross": sum((Decimal(str(x.gross_amount or 0)) for x in rows), Decimal("0"))}
+    return txns, totals, exceptions, matched
+
+
+@app.route("/vat-reconciliation", methods=["GET"])
+def vat_reconciliation_home():
+    if not _tax_required(): return redirect(url_for("home"))
+    periods = sorted({x.period for x in VATReconBatch.query.all()}, reverse=True)
+    period = request.args.get("period", "").strip() or (periods[0] if periods else datetime.utcnow().strftime("%Y-%m"))
+    batches = VATReconBatch.query.filter_by(period=period).order_by(VATReconBatch.imported_at.desc()).all()
+    txns, totals, exceptions, matched = _vat_recon_analysis(period, batches)
+    return render_template("vat_reconciliation.html", periods=periods, period=period, batches=batches, totals=totals, exceptions=exceptions, matched=matched, transaction_count=len(txns), sources=VAT_RECON_SOURCES)
+
+
+@app.route("/vat-reconciliation/template.csv")
+def vat_reconciliation_template():
+    if not _tax_required(): return redirect(url_for("home"))
+    out = io.StringIO(); writer = csv.writer(out); writer.writerow(VAT_RECON_HEADERS)
+    writer.writerow([datetime.utcnow().strftime("%Y-%m"), "INV-0001", datetime.utcnow().strftime("%Y-%m-%d"), "Example insured", "", "General Insurance Premium", "18", "1000000", "180000", "1180000", "Replace sample row with actual transaction"])
+    data = io.BytesIO(out.getvalue().encode("utf-8-sig")); data.seek(0)
+    return send_file(data, mimetype="text/csv", as_attachment=True, download_name="CETTP_VAT_Reconciliation_Import_Template.csv")
+
+
+@app.route("/vat-reconciliation/import", methods=["POST"])
+def vat_reconciliation_import():
+    if not _tax_required(): return redirect(url_for("home"))
+    source = request.form.get("source", "").upper().strip()
+    period = request.form.get("period", "").strip()
+    f = request.files.get("file")
+    if source not in VAT_RECON_SOURCES or not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", period):
+        flash("Select a valid source and reporting period (YYYY-MM).", "danger"); return redirect(url_for("vat_reconciliation_home"))
+    if not f or not f.filename:
+        flash("Choose a CSV or XLSX source file.", "warning"); return redirect(url_for("vat_reconciliation_home", period=period))
+    filename = secure_filename(f.filename) or "vat_source.xlsx"; content = f.read()
+    if not content or len(content) > 25 * 1024 * 1024:
+        flash("The file is empty or exceeds the 25 MB limit.", "danger"); return redirect(url_for("vat_reconciliation_home", period=period))
+    digest = hashlib.sha256(content).hexdigest()
+    if VATReconBatch.query.filter_by(file_sha256=digest).first():
+        flash("This exact source file has already been imported. Duplicate import was prevented.", "warning"); return redirect(url_for("vat_reconciliation_home", period=period))
+    try:
+        if filename.lower().endswith(".csv"):
+            rows = list(csv.DictReader(io.StringIO(content.decode("utf-8-sig"))))
+        elif filename.lower().endswith((".xlsx", ".xlsm")):
+            wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True); ws = wb.active
+            iterator = ws.iter_rows(values_only=True); headers = [str(v or "").strip().lower() for v in next(iterator, [])]
+            rows = [dict(zip(headers, row)) for row in iterator]; wb.close()
+        else: raise ValueError("Only .csv, .xlsx or .xlsm files are supported.")
+        cleaned=[]
+        for idx, row in enumerate(rows, start=2):
+            row={str(k or "").strip().lower():v for k,v in row.items()}
+            if not any(v not in (None, "") for v in row.values()): continue
+            required=[c for c in ("reference", "taxable_value", "vat_amount") if c not in row]
+            if required: raise ValueError("Missing required column(s): " + ", ".join(required) + ". Download the standard template.")
+            row_period=str(row.get("period") or period).strip()
+            if not str(row.get("reference") or "").strip(): raise ValueError(f"Row {idx}: transaction reference is required for traceable matching.")
+            if row_period != period: raise ValueError(f"Row {idx}: period {row_period} does not match selected period {period}.")
+            taxable=_vat_recon_decimal(row.get("taxable_value"), "taxable_value", idx)
+            vat=_vat_recon_decimal(row.get("vat_amount"), "vat_amount", idx)
+            gross=_vat_recon_decimal(row.get("gross_amount"), "gross_amount", idx) if row.get("gross_amount") not in (None, "") else taxable+vat
+            rate=_vat_recon_decimal(row.get("vat_rate"), "vat_rate", idx) if row.get("vat_rate") not in (None, "") else None
+            cleaned.append(VATReconTransaction(period=period, source=source, reference=str(row.get("reference") or "").strip()[:150], transaction_date=_vat_recon_date(row.get("transaction_date")), counterparty=str(row.get("counterparty") or "").strip()[:255] or None, tin=str(row.get("tin") or "").strip()[:40] or None, category=str(row.get("category") or "").strip()[:100] or None, vat_rate=rate, taxable_value=taxable, vat_amount=vat, gross_amount=gross, description=str(row.get("description") or "").strip() or None))
+        if not cleaned: raise ValueError("The file contains no transaction rows.")
+        batch=VATReconBatch(period=period, source=source, filename=filename[:255], file_sha256=digest, row_count=len(cleaned), imported_by=session.get("actor_name", "Tax Compliance"))
+        db.session.add(batch); db.session.flush()
+        for x in cleaned: x.batch_id=batch.id
+        db.session.add_all(cleaned); db.session.commit()
+        flash(f"Imported {len(cleaned)} {VAT_RECON_SOURCES[source]} transaction(s) for {period}.", "success")
+    except Exception as exc:
+        db.session.rollback(); flash(f"VAT import failed: {exc}", "danger")
+    return redirect(url_for("vat_reconciliation_home", period=period))
+
+
+@app.route("/vat-reconciliation/batch/<int:batch_id>/delete", methods=["POST"])
+def vat_reconciliation_delete_batch(batch_id):
+    if not _tax_required(): return redirect(url_for("home"))
+    batch=VATReconBatch.query.get_or_404(batch_id); period=batch.period
+    db.session.delete(batch); db.session.commit()
+    flash("Selected VAT source batch and its imported rows were deleted. Other source batches and existing VAT control-account records were retained.", "success")
+    return redirect(url_for("vat_reconciliation_home", period=period))
+
+
+@app.route("/vat-reconciliation/exceptions.csv")
+def vat_reconciliation_exceptions_export():
+    if not _tax_required(): return redirect(url_for("home"))
+    period=request.args.get("period", "").strip()
+    _, _, exceptions, _ = _vat_recon_analysis(period, [])
+    out=io.StringIO(); w=csv.writer(out); w.writerow(["Period","Reference","Exception","Counterparty","Category","AIMS taxable value","EFDMS taxable value","AIMS VAT","EFDMS VAT"])
+    for x in exceptions: w.writerow([period,x["reference"],x["type"],x["counterparty"],x["category"],x["aims_value"],x["efd_value"],x["aims_vat"],x["efd_vat"]])
+    data=io.BytesIO(out.getvalue().encode("utf-8-sig")); data.seek(0)
+    return send_file(data,mimetype="text/csv",as_attachment=True,download_name=f"VAT_Exceptions_{period}.csv")
+
 
 # WHT TIN Master and combined multi-sheet ledger matching
 WHT_NAMED_LEDGERS = {
