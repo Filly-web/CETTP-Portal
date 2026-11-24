@@ -2496,14 +2496,29 @@ def _build_digital_invoice_docx(data, invoice_ref=None):
         if len(table.rows) >= 3:
             net_amount = Decimal(str(data["net_amount"]))
             selected_rate = Decimal(str(data["vat_rate"]))
-            for row_index, row_rate in ((1, Decimal("0")), (2, Decimal("18"))):
-                row_vat = (net_amount * row_rate / Decimal("100")).quantize(Decimal("0.01"))
-                row_gross = net_amount + row_vat
+            # Both premium-detail blocks must reflect the VAT rate selected by the Initiator.
+            # The template intentionally repeats the same three-line calculation twice.
+            row_vat = (net_amount * selected_rate / Decimal("100")).quantize(Decimal("0.01"))
+            row_gross = net_amount + row_vat
+            for row_index in (1, 2):
                 amount_lines = (
                     f"{_money(net_amount)}\n"
                     f"{_money(row_vat)}\n"
                     f"{_money(row_gross)}"
                 )
+                label_cell = table.rows[row_index].cells[0]
+                for label_para in label_cell.paragraphs:
+                    label_text = label_para.text
+                    updated_label = label_text.replace("VAT (0%)", f"VAT ({selected_rate}%)")
+                    updated_label = updated_label.replace("VAT (18%) TZS", f"VAT ({selected_rate}%)")
+                    updated_label = updated_label.replace("Gross Premium (TZS)", "Gross Premium")
+                    if updated_label != label_text:
+                        if label_para.runs:
+                            label_para.runs[0].text = updated_label
+                            for extra_run in label_para.runs[1:]:
+                                extra_run.text = ""
+                        else:
+                            label_para.add_run(updated_label)
                 cell = table.rows[row_index].cells[-1]
                 cell.text = amount_lines
                 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -2566,34 +2581,52 @@ def _build_digital_invoice_docx(data, invoice_ref=None):
 
 
 def _build_processed_digital_invoice_docx(original_data, verification_code, receipt_time):
-    """Embed TRA verification details and QR into the existing digital invoice without a re-upload."""
+    """Embed TRA verification details and QR at the designated bottom of the invoice."""
     from docx import Document
     from docx.shared import Inches, Pt
     from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.text.paragraph import Paragraph
+    from docx.oxml import OxmlElement
     from io import BytesIO
     doc = Document(BytesIO(original_data))
     verification_url = make_verification_url(verification_code, receipt_time)
     qr_buffer = make_qr_image(verification_url)
-    if not doc.tables or len(doc.tables[0].rows) < 6:
-        raise ValueError('The digital invoice template does not contain the expected footer area for EFD details.')
-    # The existing invoice footer has unused cells alongside the bank details. Use the far-right cell
-    # so the EFD block remains inside the invoice's existing one-page table layout.
-    cell = doc.tables[0].rows[-1].cells[-1]
-    cell.text = ''
-    para = cell.paragraphs[0]
-    para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    para.paragraph_format.space_before = Pt(0)
-    para.paragraph_format.space_after = Pt(0)
-    run = para.add_run('EFD DETAILS\n')
-    run.bold = True; run.font.size = Pt(7)
-    run = para.add_run(f'Code: {verification_code}\nTime: {receipt_time}\n')
-    run.font.size = Pt(6)
+
+    # Clear any legacy EFD block from the bank-details cell; the QR belongs below the invoice.
+    if doc.tables and len(doc.tables[0].rows) >= 7:
+        footer_cell = doc.tables[0].rows[-1].cells[-1]
+        footer_cell.text = ""
+
+    # The supplied processed-invoice example marks the intended position immediately
+    # after "Exchange Rate =1", at the bottom of the tax invoice.
+    anchor = next((p for p in doc.paragraphs if "Exchange Rate" in p.text), None)
+    if anchor is None:
+        raise ValueError("The invoice template is missing the Exchange Rate footer anchor for EFD details.")
+
+    p_xml = OxmlElement("w:p")
+    anchor._p.addnext(p_xml)
+    efd_para = Paragraph(p_xml, anchor._parent)
+    efd_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    efd_para.paragraph_format.space_before = Pt(1)
+    efd_para.paragraph_format.space_after = Pt(0)
+    efd_para.paragraph_format.keep_together = True
+
+    title = efd_para.add_run("EFD DETAILS\n")
+    title.bold = True
+    title.font.size = Pt(7)
+    details = efd_para.add_run(f"Code: {verification_code}    Time: {receipt_time}\n")
+    details.font.size = Pt(6)
     qr_buffer.seek(0)
-    para.add_run().add_picture(qr_buffer, width=Inches(0.72))
+    efd_para.add_run().add_picture(qr_buffer, width=Inches(0.58))
+
     for section in doc.sections:
-        section.top_margin = Inches(0.48); section.bottom_margin = Inches(0.32)
-        section.left_margin = Inches(0.42); section.right_margin = Inches(0.42)
-    out = BytesIO(); doc.save(out); out.seek(0)
+        section.top_margin = Inches(0.48)
+        section.bottom_margin = Inches(0.25)
+        section.left_margin = Inches(0.42)
+        section.right_margin = Inches(0.42)
+    out = BytesIO()
+    doc.save(out)
+    out.seek(0)
     return out.getvalue(), verification_url
 
 
