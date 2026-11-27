@@ -13,7 +13,7 @@ from sqlalchemy import or_, func, delete, inspect, text, Boolean
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 from io import BytesIO
-import csv, io, smtplib, ssl, logging, hashlib, hmac, re
+import csv, io, smtplib, ssl, logging, hashlib, hmac, re, json
 from email.message import EmailMessage
 from decimal import Decimal, InvalidOperation
 from sqlalchemy import UniqueConstraint
@@ -225,6 +225,37 @@ class VATReconTransaction(db.Model):
     description = db.Column(db.Text)
     batch = db.relationship("VATReconBatch", backref=db.backref("transactions", lazy=True, cascade="all, delete-orphan"))
 
+
+
+class EFDReconBatch(db.Model):
+    __tablename__ = "efd_recon_batches"
+    id = db.Column(db.Integer, primary_key=True)
+    period = db.Column(db.String(7), nullable=False, index=True)
+    source = db.Column(db.String(12), nullable=False, index=True)  # AIMS / TRA
+    filename = db.Column(db.String(255), nullable=False)
+    file_sha256 = db.Column(db.String(64), nullable=False, index=True)
+    row_count = db.Column(db.Integer, nullable=False, default=0)
+    imported_by = db.Column(db.String(180), nullable=False)
+    imported_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    is_current = db.Column(db.Boolean, nullable=False, default=True, index=True)
+
+
+class EFDReconRow(db.Model):
+    __tablename__ = "efd_recon_rows"
+    id = db.Column(db.Integer, primary_key=True)
+    batch_id = db.Column(db.Integer, db.ForeignKey("efd_recon_batches.id", ondelete="CASCADE"), nullable=False, index=True)
+    row_number = db.Column(db.Integer, nullable=False)
+    verification_code = db.Column(db.String(120), index=True)
+    policy_number = db.Column(db.String(120), index=True)
+    policy_status = db.Column(db.String(60))
+    transaction_type = db.Column(db.String(100))
+    transaction_date = db.Column(db.String(40))
+    customer_name = db.Column(db.String(255))
+    customer_tin = db.Column(db.String(60))
+    channel_name = db.Column(db.String(120))
+    amount = db.Column(db.String(60))
+    raw_data = db.Column(db.Text)
+    batch = db.relationship("EFDReconBatch", backref=db.backref("rows", cascade="all, delete-orphan", lazy=True))
 
 class SupplierTINImportBatch(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -1771,6 +1802,238 @@ def _vat_recon_analysis(period, batches):
     return txns, totals, exceptions, matched
 
 
+
+def _efd_code(value):
+    return re.sub(r"\s+", "", str(value or "").strip()).upper()
+
+
+def _efd_header_map(ws, source):
+    required = ("TaxEfdCode",) if source == "AIMS" else ("RCTVNUM",)
+    for row_idx in range(1, min(ws.max_row, 12) + 1):
+        values = [str(c.value or "").strip() for c in ws[row_idx]]
+        normalized = {re.sub(r"[^a-z0-9]", "", v.lower()): i for i, v in enumerate(values)}
+        if all(re.sub(r"[^a-z0-9]", "", h.lower()) in normalized for h in required):
+            return row_idx, normalized
+    raise ValueError(f"Could not identify the required {source} verification-code column. AIMS requires TaxEfdCode; TRA requires RCTVNUM.")
+
+
+def _efd_col(headers, *names):
+    for name in names:
+        key = re.sub(r"[^a-z0-9]", "", name.lower())
+        if key in headers:
+            return headers[key]
+    return None
+
+
+def _parse_efd_upload(content, filename, source):
+    if filename.lower().endswith(".csv"):
+        rows = list(csv.reader(io.StringIO(content.decode("utf-8-sig"))))
+        class Sheet:
+            max_row = len(rows)
+            def __getitem__(self, idx):
+                row_index = idx if isinstance(idx, int) else idx[0]
+                vals = rows[row_index-1]
+                return [type("Cell", (), {"value": v})() for v in vals]
+        ws = Sheet()
+    else:
+        wb = load_workbook(BytesIO(content), read_only=True, data_only=True)
+        ws = wb[wb.sheetnames[0]]
+    header_row, headers = _efd_header_map(ws, source)
+    code_col = _efd_col(headers, "TaxEfdCode" if source == "AIMS" else "RCTVNUM")
+    policy_col = _efd_col(headers, "PolicyNo", "Policy Number", "PolicyNo.")
+    status_col = _efd_col(headers, "PolicyStatus", "Policy Status", "Status")
+    txn_col = _efd_col(headers, "TXNType", "Transaction Type", "Type")
+    date_col = _efd_col(headers, "Date", "Transaction Date")
+    name_col = _efd_col(headers, "ClientName", "Customer Name", "Name")
+    tin_col = _efd_col(headers, "ClientTIN", "Customer TIN", "TIN")
+    channel_col = _efd_col(headers, "TXNChannelName", "Transaction Channel", "Channel")
+    amount_col = _efd_col(headers, "GrossPremium", "Gross Premium", "Amount", "Total")
+    parsed = []
+    for row_no in range(header_row + 1, ws.max_row + 1):
+        vals = [c.value for c in ws[row_no]]
+        def val(idx):
+            return vals[idx] if idx is not None and idx < len(vals) else None
+        code = _efd_code(val(code_col))
+        policy = str(val(policy_col) or "").strip() if policy_col is not None else ""
+        status = str(val(status_col) or "").strip() if status_col is not None else ""
+        txn = str(val(txn_col) or "").strip() if txn_col is not None else ""
+        if not code and not policy and not txn:
+            continue
+        parsed.append({
+            "row_number": row_no, "verification_code": code or None,
+            "policy_number": policy or None, "policy_status": status or None,
+            "transaction_type": txn or None,
+            "transaction_date": str(val(date_col) or "")[:40] if date_col is not None else None,
+            "customer_name": str(val(name_col) or "")[:255] if name_col is not None else None,
+            "customer_tin": str(val(tin_col) or "")[:60] if tin_col is not None else None,
+            "channel_name": str(val(channel_col) or "")[:120] if channel_col is not None else None,
+            "amount": str(val(amount_col) or "")[:60] if amount_col is not None else None,
+            "raw_data": json.dumps([str(v) if v is not None else None for v in vals], ensure_ascii=False)
+        })
+    return parsed
+
+
+@app.route("/efd-compliance", methods=["GET"])
+def efd_compliance_home():
+    if not _tax_required():
+        return redirect(url_for("home"))
+    periods = [b.period for b in EFDReconBatch.query.order_by(EFDReconBatch.period.desc()).all()]
+    period = request.args.get("period", "").strip()
+    if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", period):
+        period = periods[0] if periods else datetime.utcnow().strftime("%Y-%m")
+    batch_history = EFDReconBatch.query.filter_by(period=period).order_by(EFDReconBatch.imported_at.desc()).all()
+    batches = {b.source: b for b in batch_history if b.is_current}
+    aims_rows = batches.get("AIMS").rows if batches.get("AIMS") else []
+    tra_rows = batches.get("TRA").rows if batches.get("TRA") else []
+    aims_codes = {}
+    tra_codes = {}
+    for row in aims_rows:
+        if row.verification_code:
+            aims_codes.setdefault(_efd_code(row.verification_code), []).append(row)
+    for row in tra_rows:
+        if row.verification_code:
+            tra_codes.setdefault(_efd_code(row.verification_code), []).append(row)
+    matched = sorted(set(aims_codes) & set(tra_codes))
+    missing_tra = [r for code, rows in aims_codes.items() if code not in tra_codes for r in rows]
+    missing_aims = [r for code, rows in tra_codes.items() if code not in aims_codes for r in rows]
+    duplicate_aims = [(code, rows) for code, rows in aims_codes.items() if len(rows) > 1]
+    duplicate_tra = [(code, rows) for code, rows in tra_codes.items() if len(rows) > 1]
+    cancelled = [r for r in aims_rows if (r.policy_status or "").upper() == "CANCELLED" or "CANCELLATION" in (r.transaction_type or "").upper()]
+    cancelled_codes_missing = [r for r in cancelled if r.verification_code and _efd_code(r.verification_code) not in tra_codes]
+    cancelled_still_in_tra = [r for r in cancelled if r.verification_code and _efd_code(r.verification_code) in tra_codes]
+    no_code = [r for r in aims_rows if not r.verification_code]
+    bankassurance_no_code = [r for r in no_code if "BANK" in (r.channel_name or "").upper()]
+    if not batches.get("AIMS") or not batches.get("TRA"):
+        monthly_status = "Awaiting Upload"
+    elif missing_tra or missing_aims or no_code or duplicate_aims or duplicate_tra:
+        monthly_status = "Exceptions Identified"
+    else:
+        monthly_status = "Reconciled"
+    return render_template("efd_compliance.html", periods=sorted(set(periods), reverse=True),
+        period=period, batches=batches, batch_history=batch_history, monthly_status=monthly_status, bankassurance_no_code=bankassurance_no_code,
+        aims_count=len(aims_rows), tra_count=len(tra_rows),
+        matched_count=len(matched), missing_tra=missing_tra, missing_aims=missing_aims,
+        duplicate_aims=duplicate_aims, duplicate_tra=duplicate_tra, cancelled=cancelled,
+        cancelled_codes_missing=cancelled_codes_missing, cancelled_still_in_tra=cancelled_still_in_tra,
+        no_code=no_code)
+
+
+@app.route("/efd-compliance/upload", methods=["POST"])
+def efd_compliance_upload():
+    if not _tax_required():
+        return redirect(url_for("home"))
+    period = request.form.get("period", "").strip()
+    source = request.form.get("source", "").upper().strip()
+    upload = request.files.get("file")
+    if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", period) or source not in ("AIMS", "TRA"):
+        flash("Select a valid reporting month and source.", "danger")
+        return redirect(url_for("efd_compliance_home"))
+    if not upload or not upload.filename:
+        flash("Choose an AIMS or TRA report to upload.", "warning")
+        return redirect(url_for("efd_compliance_home", period=period))
+    filename = secure_filename(upload.filename)
+    if filename.rsplit(".", 1)[-1].lower() not in {"xlsx", "xlsm", "csv"}:
+        flash("Upload an XLSX, XLSM or CSV report.", "danger")
+        return redirect(url_for("efd_compliance_home", period=period))
+    content = upload.read()
+    if not content or len(content) > 25 * 1024 * 1024:
+        flash("The file is empty or exceeds the 25 MB limit.", "danger")
+        return redirect(url_for("efd_compliance_home", period=period))
+    digest = hashlib.sha256(content).hexdigest()
+    duplicate = EFDReconBatch.query.filter_by(period=period, source=source, file_sha256=digest).first()
+    if duplicate:
+        flash("This exact file has already been uploaded for the selected month.", "warning")
+        return redirect(url_for("efd_compliance_home", period=period))
+    existing = EFDReconBatch.query.filter_by(period=period, source=source, is_current=True).first()
+    if existing and (session.get("role") != "admin" or request.form.get("replace") != "yes"):
+        flash(f"A {source} batch already exists for {period}. Only CETTP Admin can replace it; confirm replacement explicitly.", "warning")
+        return redirect(url_for("efd_compliance_home", period=period))
+    try:
+        parsed = _parse_efd_upload(content, filename, source)
+        if existing:
+            existing.is_current = False
+        batch = EFDReconBatch(period=period, source=source, filename=filename,
+            file_sha256=digest, row_count=len(parsed),
+            imported_by=session.get("email") or session.get("actor_name") or "Unknown",
+            is_current=True)
+        db.session.add(batch)
+        db.session.flush()
+        for record in parsed:
+            db.session.add(EFDReconRow(batch_id=batch.id, **record))
+        db.session.commit()
+        flash(f"{source} report uploaded for {period}: {len(parsed):,} rows imported.", "success")
+    except Exception as exc:
+        db.session.rollback()
+        logger.exception("EFD compliance upload failed")
+        flash(f"EFD report upload failed: {exc}", "danger")
+    return redirect(url_for("efd_compliance_home", period=period))
+
+
+@app.route("/efd-compliance/batch/<int:batch_id>/delete", methods=["POST"])
+def efd_compliance_delete_batch(batch_id):
+    if session.get("role") != "admin":
+        abort(403)
+    batch = EFDReconBatch.query.get_or_404(batch_id)
+    period, source, was_current = batch.period, batch.source, batch.is_current
+    db.session.delete(batch)
+    db.session.flush()
+    if was_current:
+        previous = EFDReconBatch.query.filter_by(period=period, source=source).order_by(EFDReconBatch.imported_at.desc()).first()
+        if previous:
+            previous.is_current = True
+    db.session.commit()
+    flash(f"{source} batch for {period} was deleted.", "success")
+    return redirect(url_for("efd_compliance_home", period=period))
+
+
+
+@app.route("/efd-compliance/export.xlsx")
+def efd_compliance_export():
+    if not _tax_required():
+        return redirect(url_for("home"))
+    period = request.args.get("period", "").strip()
+    if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", period):
+        abort(400)
+    batches = {b.source: b for b in EFDReconBatch.query.filter_by(period=period, is_current=True).all()}
+    aims_rows = batches.get("AIMS").rows if batches.get("AIMS") else []
+    tra_rows = batches.get("TRA").rows if batches.get("TRA") else []
+    aims_codes, tra_codes = {}, {}
+    for row in aims_rows:
+        if row.verification_code: aims_codes.setdefault(_efd_code(row.verification_code), []).append(row)
+    for row in tra_rows:
+        if row.verification_code: tra_codes.setdefault(_efd_code(row.verification_code), []).append(row)
+    wb = Workbook()
+    summary = wb.active
+    summary.title = "Monthly Summary"
+    summary.append(["EFD Compliance Reconciliation", period])
+    summary.append(["AIMS records", len(aims_rows)])
+    summary.append(["TRA records", len(tra_rows)])
+    summary.append(["Matched verification codes", len(set(aims_codes) & set(tra_codes))])
+    summary.append(["AIMS codes missing in TRA", sum(len(v) for k,v in aims_codes.items() if k not in tra_codes)])
+    summary.append(["TRA codes missing in AIMS", sum(len(v) for k,v in tra_codes.items() if k not in aims_codes)])
+    summary.append(["AIMS records without code", sum(1 for r in aims_rows if not r.verification_code)])
+    def add_sheet(title, headers, rows):
+        ws = wb.create_sheet(title); ws.append(headers)
+        for row in rows: ws.append(row)
+        ws.freeze_panes = "A2"; ws.auto_filter.ref = ws.dimensions
+        for cell in ws[1]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="123B66")
+        for col in ws.columns:
+            letter = get_column_letter(col[0].column)
+            ws.column_dimensions[letter].width = min(max(max(len(str(c.value or "")) for c in col[:250])+2, 12), 40)
+    add_sheet("AIMS Missing in TRA", ["AIMS row","Verification code","Policy","Status","Transaction type","Date","Customer","TIN","Amount"],
+        [[r.row_number,r.verification_code,r.policy_number,r.policy_status,r.transaction_type,r.transaction_date,r.customer_name,r.customer_tin,r.amount] for k,rs in aims_codes.items() if k not in tra_codes for r in rs])
+    add_sheet("TRA Missing in AIMS", ["TRA row","Verification code","Reference / policy","Type","Date","Customer","TIN","Amount"],
+        [[r.row_number,r.verification_code,r.policy_number,r.transaction_type,r.transaction_date,r.customer_name,r.customer_tin,r.amount] for k,rs in tra_codes.items() if k not in aims_codes for r in rs])
+    add_sheet("Cancelled AIMS", ["AIMS row","Policy","Verification code","Status","Transaction type","Code in TRA"],
+        [[r.row_number,r.policy_number,r.verification_code,r.policy_status,r.transaction_type,"Yes" if r.verification_code and _efd_code(r.verification_code) in tra_codes else "No / no code"] for r in aims_rows if (r.policy_status or "").upper()=="CANCELLED" or "CANCELLATION" in (r.transaction_type or "").upper()])
+    add_sheet("Missing EFD Code", ["AIMS row","Policy","Status","Transaction type","Channel","Customer","TIN","Amount"],
+        [[r.row_number,r.policy_number,r.policy_status,r.transaction_type,r.channel_name,r.customer_name,r.customer_tin,r.amount] for r in aims_rows if not r.verification_code])
+    data=BytesIO(); wb.save(data); data.seek(0)
+    return send_file(data,mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",as_attachment=True,download_name=f"CETTP_EFD_Compliance_{period}.xlsx")
+
+
 @app.route("/vat-reconciliation", methods=["GET"])
 def vat_reconciliation_home():
     if not _tax_required(): return redirect(url_for("home"))
@@ -2982,9 +3245,9 @@ def efd_request_reject(request_id):
 
 @app.route("/efd-requests/<int:request_id>/delete", methods=["POST"])
 def efd_request_delete(request_id):
-    # Tax Compliance-only permanent purge. Delete request-specific EFD audit and
-    # central email log rows, then delete the request (including embedded files).
-    if session.get("role") not in ("tax", "admin"): abort(403)
+    # CETTP Admin-only permanent purge, including already processed requests.
+    # Delete request-specific EFD audit and email-log rows before deleting embedded files.
+    if session.get("role") != "admin": abort(403)
     item = EFDInvoiceRequest.query.get_or_404(request_id)
     request_ref = item.reference
     request_pk = item.id
@@ -4215,7 +4478,7 @@ def tax_vat_control_export():
 
 @app.route("/health")
 def health():
-    return jsonify(status="ok", application="CETTP Tax Compliance & Cancellation Tracking Portal", version="3.6.2-admin-managed-access")
+    return jsonify(status="ok", application="CETTP Tax Compliance & Cancellation Tracking Portal", version="3.8.1-efd-monthly-compliance")
 
 @app.context_processor
 def inject_globals():

@@ -40,6 +40,7 @@
    <div class="sidebar-section">TAX &amp; RECONCILIATION</div>
    <a class="side-link {{ 'active' if request.endpoint == 'tax_calendar' else '' }}" href="{{ url_for('tax_calendar') }}"><i class="bi bi-calendar3"></i><span>Compliance Calendar</span></a>
    <a class="side-link {{ 'active' if request.endpoint in ['reconciliation_home','vat_reconciliation_home','vat_reconciliation_import','vat_reconciliation_delete_batch','vat_reconciliation_template','vat_reconciliation_exceptions_export'] else '' }}" href="{{ url_for('vat_reconciliation_home') }}"><i class="bi bi-calculator"></i><span>VAT Reconciliation</span></a>
+   <a class="side-link {{ 'active' if request.endpoint == 'efd_compliance_home' else '' }}" href="{{ url_for('efd_compliance_home') }}"><i class="bi bi-receipt-cutoff"></i><span>EFD Compliance Check</span></a>
    <a class="side-link {{ 'active' if request.endpoint and request.endpoint.startswith('wht_tin_') else '' }}" href="{{ url_for('wht_tin_home') }}"><i class="bi bi-person-vcard"></i><span>WHT TIN Matching</span></a>
    <a class="side-link {{ 'active' if request.endpoint and request.endpoint.startswith('tax_vat_control') else '' }}" href="{{ url_for('tax_vat_control') }}"><i class="bi bi-journal-text"></i><span>VAT Control Account</span></a>
    <a class="side-link {{ 'active' if request.endpoint and request.endpoint.startswith('tax_investment_wht') else '' }}" href="{{ url_for('tax_investment_wht') }}"><i class="bi bi-bank"></i><span>Investment WHT</span></a>
