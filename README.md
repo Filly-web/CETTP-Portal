@@ -1,4 +1,4 @@
-# Britam CETTP V3.6.0 – Tax & Compliance Portal
+# Britam CETTP V3.8.3 – Tax & Compliance Portal
 
 Integrated internal portal for cancellation and endorsement tracking plus VAT and WHT reconciliation workflows.
 
@@ -8,7 +8,9 @@ Integrated internal portal for cancellation and endorsement tracking plus VAT an
 - Tracking of original invoices, adjustment/VAT amounts, credit notes, replacement invoices, adjustment references, TRA status and acknowledgement.
 - Workflow statuses, search/filter, case detail and audit history.
 - Dashboard metrics and Chart.js visualizations.
-- VAT and WHT reconciliation workspace with CSV/XLSX imports, sample templates, period filters, book-vs-TRA totals, row-level variances and deletion of imported rows.
+- VAT reconciliation workspace with period-based imports, source matching, exception reporting and batch controls.
+- Monthly EFD Compliance Check comparing AIMS `TaxEfdCode` values with TRA `RCTVNUM` receipt codes, with month-specific batches, exception reporting, Excel export, role-authorized deletion and bounded bulk insertion for large reports.
+- Administrator and Tax Compliance permanent deletion of uploaded EFD reports and online EFD invoice requests, including already processed invoices; CETTP Admin remains the only role permitted to replace a monthly AIMS/TRA batch.
 - Generic reconciliation columns support VAT streams (e.g. General/Medical premiums, facultative inwards, commission receivable, fronted business, salvage and fees) and WHT streams (e.g. agents commissions and other payees) using the Source and Category fields.
 - SQLite by default for development; PostgreSQL via `DATABASE_URL` in production.
 - Flask-WTF CSRF protection, SQLAlchemy ORM and Flask-Migrate support.
@@ -135,3 +137,13 @@ See `README_V3_0_0_VAT_CONTROL_ACCOUNT.md` for user instructions and `CHANGELOG_
 ## Investment WHT Credits (V3.1.0)
 
 The Tax Compliance Workspace includes an Investment WHT Credits register for bank deposits and other investments. It supports individual registration, Excel batch upload, actual-days/365 expected interest calculations with a bank-confirmed override, 10% expected WHT, maturity-based outstanding WHT receivable, actual WHT reconciliation, TRA certificate attachments, and scheduled email reminders. See `README_INVESTMENT_WHT_CREDITS.md` and `CHANGELOG_V3_1_0_INVESTMENT_WHT_CREDITS.md` for user instructions and reminder deployment configuration.
+
+
+## V3.8.3 – EFD report deletion and large-upload reliability
+- Administrator and Tax Compliance can delete an existing AIMS/TRA monthly batch and its associated rows. If the current batch is deleted, the latest remaining historical version is restored as current.
+- CETTP Admin-only replacement permission is retained; Tax Compliance receives delete permission but not replace permission.
+- EFD uploads accept files up to 35 MB (within the app's 40 MB request cap) and insert rows in bounded 250-row chunks inside one transaction. A failed chunk rolls back the entire upload.
+- Online EFD invoice requests can be permanently deleted by Administrator and Tax Compliance from both the request detail and workplace list, including original/processed files, digital invoice data, request audit rows and related request email-log rows.
+- EFD Invoice Portal processing-history records can be deleted by Administrator and Tax Compliance. This removes the history entry only; the standalone portal does not persist the downloaded DOCX output.
+- No notification models, routes, templates, tables or notification behavior were intentionally changed.
+- See `CHANGELOG_V3_8_3_EFD_DELETE_AND_LARGE_UPLOAD_FIX.md` and `TEST_RESULTS_V3_8_3.md`.

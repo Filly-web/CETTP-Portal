@@ -478,6 +478,28 @@ def history():
     return render_template("efd_portal/history.html", rows=rows)
 
 
+@efd_bp.route("/history/<int:record_id>/delete", methods=["POST"])
+def delete_history_record(record_id):
+    # Processing-history cleanup is restricted to Tax Compliance and Admin.
+    if session.get("role") not in ("tax", "admin"):
+        abort(403)
+    try:
+        with get_db() as conn:
+            cursor = conn.execute(
+                "DELETE FROM processing_history WHERE id = ?", (record_id,)
+            )
+            if cursor.rowcount != 1:
+                flash("The selected processing-history record was not found.", "warning")
+            else:
+                flash("The processed-invoice history record was deleted.", "success")
+    except Exception:
+        current_app.logger.exception(
+            "Unable to delete EFD processing history record id=%s", record_id
+        )
+        flash("The processing-history record could not be deleted. Contact the administrator.", "error")
+    return redirect(url_for("efd_portal.history"))
+
+
 @efd_bp.app_errorhandler(413)
 def file_too_large(_error):
     flash("The uploaded file is too large. Maximum size is 15 MB.", "error")
