@@ -4,15 +4,18 @@ Run with: python -m unittest discover -s tests
 """
 import os
 import unittest
+import tempfile
+from pathlib import Path
 from io import BytesIO
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("SECRET_KEY", "test-only-secret")
 
 from openpyxl import Workbook
+import efd_portal
 from app import (
     app, db, _parse_efd_upload, EFDInvoiceRequest, EFDRequestAudit,
-    PortalEmailLog, DigitalTaxInvoice
+    PortalEmailLog, DigitalTaxInvoice, EFDReconBatch, EFDReconRow
 )
 
 
@@ -91,6 +94,89 @@ class EFDComplianceTests(unittest.TestCase):
             self.assertEqual(EFDRequestAudit.query.filter_by(request_id=request_id).count(), 0)
             self.assertEqual(PortalEmailLog.query.filter_by(reference_id=request_id).count(), 0)
             self.assertEqual(DigitalTaxInvoice.query.filter_by(request_id=request_id).count(), 0)
+
+
+    def test_two_thousand_row_tra_upload_is_saved_atomically(self):
+        wb = Workbook()
+        ws = wb.active
+        ws.append(["RCTVNUM", "Policy Number", "Receipt Date", "Receipt Type", "Customer Name", "Amount"])
+        for i in range(2000):
+            ws.append([f"TRA-{i:06d}", f"POL-{i:06d}", "2026-11-15", "Fiscal Receipt", f"Customer {i}", 1000 + i])
+        bio = BytesIO()
+        wb.save(bio)
+        with self.client.session_transaction() as sess:
+            sess["role"] = "tax"
+            sess["actor_name"] = "Tax Compliance Test"
+        response = self.client.post("/efd-compliance/upload", data={
+            "period": "2026-11", "source": "TRA",
+            "file": (BytesIO(bio.getvalue()), "tra_november.xlsx"),
+        }, content_type="multipart/form-data")
+        self.assertIn(response.status_code, (302, 303))
+        with app.app_context():
+            batch = EFDReconBatch.query.filter_by(period="2026-11", source="TRA", is_current=True).first()
+            self.assertIsNotNone(batch)
+            self.assertEqual(batch.row_count, 2000)
+            self.assertEqual(EFDReconRow.query.filter_by(batch_id=batch.id).count(), 2000)
+
+    def test_tax_can_delete_current_tra_batch_and_restore_previous(self):
+        with app.app_context():
+            previous = EFDReconBatch(period="2026-11", source="TRA", filename="previous.xlsx",
+                file_sha256="a" * 64, row_count=1, imported_by="Tax", is_current=False)
+            current = EFDReconBatch(period="2026-11", source="TRA", filename="current.xlsx",
+                file_sha256="b" * 64, row_count=1, imported_by="Tax", is_current=True)
+            db.session.add_all([previous, current])
+            db.session.flush()
+            current_id = current.id
+            db.session.add(EFDReconRow(batch_id=current.id, row_number=2, verification_code="TRA-1"))
+            db.session.commit()
+        with self.client.session_transaction() as sess:
+            sess["role"] = "tax"
+        response = self.client.post(f"/efd-compliance/batch/{current_id}/delete")
+        self.assertIn(response.status_code, (302, 303))
+        with app.app_context():
+            self.assertIsNone(db.session.get(EFDReconBatch, current_id))
+            restored = EFDReconBatch.query.filter_by(period="2026-11", source="TRA", is_current=True).first()
+            self.assertIsNotNone(restored)
+            self.assertEqual(restored.filename, "previous.xlsx")
+
+    def test_tax_user_sees_delete_action_but_not_replace_control(self):
+        with app.app_context():
+            batch = EFDReconBatch(period="2026-11", source="TRA", filename="tra.xlsx",
+                file_sha256="c" * 64, row_count=1, imported_by="Tax", is_current=True)
+            db.session.add(batch)
+            db.session.commit()
+        with self.client.session_transaction() as sess:
+            sess["role"] = "tax"
+        response = self.client.get("/efd-compliance?period=2026-11")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Delete", response.data)
+        self.assertNotIn(b"Replace existing batch", response.data)
+
+
+    def test_tax_can_delete_standalone_efd_portal_history_record(self):
+        original_database = efd_portal.DATABASE
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                efd_portal.DATABASE = Path(temp_dir) / "portal_history.db"
+                efd_portal.init_db()
+                with efd_portal.get_db() as conn:
+                    cursor = conn.execute("""
+                        INSERT INTO processing_history
+                        (created_at, process_date, filename, verification_code, receipt_time)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, ("2026-11-28 10:00:00", "2026-11-28", "sample.docx", "TRA-1", "10:00:00"))
+                    record_id = cursor.lastrowid
+                with self.client.session_transaction() as sess:
+                    sess["role"] = "tax"
+                response = self.client.post(f"/efd-invoice/history/{record_id}/delete")
+                self.assertIn(response.status_code, (302, 303))
+                with efd_portal.get_db() as conn:
+                    remaining = conn.execute(
+                        "SELECT COUNT(*) AS n FROM processing_history WHERE id = ?", (record_id,)
+                    ).fetchone()["n"]
+                    self.assertEqual(remaining, 0)
+        finally:
+            efd_portal.DATABASE = original_database
 
     def test_initiator_cannot_delete_processed_invoice(self):
         request_id = self._create_request()

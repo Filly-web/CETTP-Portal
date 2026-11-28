@@ -62,7 +62,7 @@
         </aside>
       </div>
       <section class="panel activity" id="activity"><div class="activity-head"><h2>Recent activity</h2><a class="text-link" href="/efd-invoice/history">View full history →</a></div>
-        {% if recent %}<div class="table-wrap"><table><thead><tr><th>Date &amp; time</th><th>Original file</th><th>Verification code</th></tr></thead><tbody>{% for row in recent %}<tr><td>{{ row['created_at'] }}</td><td>{{ row['filename'] }}</td><td class="code">{{ row['verification_code'] }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="empty">No invoices processed yet. Your recent activity will appear here after your first invoice.</div>{% endif %}
+        {% if recent %}<div class="table-wrap"><table><thead><tr><th>Date &amp; time</th><th>Original file</th><th>Verification code</th>{% if session.get('role') in ['tax', 'admin'] %}<th>Action</th>{% endif %}</tr></thead><tbody>{% for row in recent %}<tr><td>{{ row['created_at'] }}</td><td>{{ row['filename'] }}</td><td class="code">{{ row['verification_code'] }}</td>{% if session.get('role') in ['tax', 'admin'] %}<td><a class="text-link" href="/efd-invoice/history">Manage history</a></td>{% endif %}</tr>{% endfor %}</tbody></table></div>{% else %}<div class="empty">No invoices processed yet. Your recent activity will appear here after your first invoice.</div>{% endif %}
       </section>
       <footer class="footer">Britam EFD Portal · Tax Compliance · © 2026 Britam<br>With you every step of the way.</footer>
     </main>
